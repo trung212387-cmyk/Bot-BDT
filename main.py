@@ -26,7 +26,6 @@ if env_path.exists():
 else:
     print("ℹ️ Không tìm thấy file .env, bot sẽ sử dụng biến môi trường từ hệ thống Cloud.")
 
-# Khởi tạo cơ sở dữ liệu SQLite
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -57,6 +56,14 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             command TEXT,
             args TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mc_config (
+            user_id TEXT PRIMARY KEY,
+            host TEXT,
+            port INTEGER,
+            username TEXT
         )
     """)
     conn.commit()
@@ -107,18 +114,15 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 views_registered = False
 
-
 def embed(title, description, color=0x2B2D31):
     result = discord.Embed(title=f"『 {title} 』", description=description, color=color)
     result.set_footer(text="Hệ thống quản lý Bot | ph.huyy")
     result.timestamp = datetime.now()
     return result
 
-
 def get_channel(guild, key):
     value = get_config(key)
     return guild.get_channel(value) if value else None
-
 
 def record_chat_activity(message):
     week_info = datetime.now().isocalendar()
@@ -138,7 +142,6 @@ def record_chat_activity(message):
     conn.commit()
     conn.close()
 
-
 async def connect_nodes():
     await bot.wait_until_ready()
     try:
@@ -146,7 +149,6 @@ async def connect_nodes():
         await wavelink.Pool.connect(nodes=[node], client=bot)
     except Exception as e:
         print(f"⚠️ Không thể kết nối Wavelink Node: {e}")
-
 
 class CloseTicketView(View):
     def __init__(self):
@@ -160,7 +162,6 @@ class CloseTicketView(View):
             await interaction.channel.delete(reason="Ticket closed")
         except discord.HTTPException:
             pass
-
 
 class TicketPanelView(View):
     def __init__(self):
@@ -200,7 +201,6 @@ class TicketPanelView(View):
     async def report(self, interaction, button):
         await self.create_ticket(interaction, "Tố Cáo / Góp Ý", "to-cao")
 
-
 class RoleView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -222,7 +222,6 @@ class RoleView(View):
         except discord.Forbidden:
             await interaction.response.send_message("❌ Bot không đủ quyền quản lý role này.", ephemeral=True)
 
-
 class UnlockView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -240,24 +239,6 @@ class UnlockView(View):
         except discord.Forbidden:
             await interaction.response.send_message("❌ Bot không đủ quyền trao role.", ephemeral=True)
 
-
-class OnboardingModal(Modal, title="📝 Khảo Sát Thành Viên Mới"):
-    fullname = TextInput(label="Họ và tên", max_length=50)
-    hobby = TextInput(label="Sở thích / Mục đích tham gia", style=discord.TextStyle.paragraph, max_length=300)
-
-    async def on_submit(self, interaction):
-        await interaction.response.send_message(embed=embed("HOÀN TẤT ĐĂNG KÝ", f"Cảm ơn bạn **{self.fullname.value}**!\n\n📌 **Thông tin:** {self.hobby.value}", 0x57F287), ephemeral=True)
-
-
-class OnboardingView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🚀 Bắt đầu khai báo thông tin", style=discord.ButtonStyle.success, custom_id="start_onboarding_modal")
-    async def open_modal(self, interaction, button):
-        await interaction.response.send_modal(OnboardingModal())
-
-
 class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
     msg_input = TextInput(label="Nội dung tin nhắn", style=discord.TextStyle.paragraph, default=get_config("welcome_message") or "", required=True, max_length=1000)
     img_input = TextInput(label="URL Hình ảnh", default=get_config("welcome_image") or "", required=False, max_length=500)
@@ -266,7 +247,6 @@ class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
         set_config("welcome_message", self.msg_input.value.strip())
         set_config("welcome_image", self.img_input.value.strip())
         await interaction.response.send_message("✅ Đã cập nhật thành công nội dung chào mừng!", ephemeral=True)
-
 
 class GoodbyeModal(Modal, title="⚙️ Cài đặt Tạm Biệt (Goodbye)"):
     msg_input = TextInput(label="Nội dung tin nhắn", style=discord.TextStyle.paragraph, default=get_config("goodbye_message") or "", required=True, max_length=1000)
@@ -277,6 +257,31 @@ class GoodbyeModal(Modal, title="⚙️ Cài đặt Tạm Biệt (Goodbye)"):
         set_config("goodbye_image", self.img_input.value.strip())
         await interaction.response.send_message("✅ Đã cập nhật thành công nội dung tạm biệt!", ephemeral=True)
 
+class MinecraftConfigModal(Modal, title="⚙️ Cài đặt Bot Minecraft"):
+    host_input = TextInput(label="IP Server Minecraft", placeholder="Ví dụ: play.myserver.com hoặc IP", required=True, max_length=100)
+    port_input = TextInput(label="Port Server", placeholder="Mặc định là 25565", default="25565", required=True, max_length=5)
+    name_input = TextInput(label="Tên nhân vật (Username) của Bot", placeholder="Ví dụ: MyMinecraftBot", required=True, max_length=16)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        host = self.host_input.value.strip()
+        port_str = self.port_input.value.strip()
+        username = self.name_input.value.strip()
+        port = int(port_str) if port_str.isdigit() else 25565
+
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO mc_config (user_id, host, port, username) 
+            VALUES (?, ?, ?, ?)
+        """, (user_id, host, port, username))
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message(
+            f"✅ Đã lưu cấu hình server!\n- **IP:** `{host}:{port}`\n- **Tên Bot:** `{username}`", 
+            ephemeral=True
+        )
 
 class SetupChannelSelect(ChannelSelect):
     def __init__(self, key):
@@ -288,12 +293,10 @@ class SetupChannelSelect(ChannelSelect):
         set_config(self.key, selected_channel.id)
         await interaction.response.edit_message(content=f"✅ Đã cài đặt **`{self.key}`** vào kênh {selected_channel.mention}!", view=None, embed=None)
 
-
 class SetupChannelView(View):
     def __init__(self, key):
         super().__init__(timeout=60)
         self.add_item(SetupChannelSelect(key))
-
 
 class SetupSelect(Select):
     def __init__(self):
@@ -309,7 +312,6 @@ class SetupSelect(Select):
         else:
             await interaction.response.send_modal(ConfigModal(selected_key))
 
-
 class ConfigModal(Modal):
     def __init__(self, key):
         super().__init__(title=f"⚙️ Cài đặt {key}")
@@ -324,18 +326,16 @@ class ConfigModal(Modal):
         set_config(self.key, int(raw) if raw else None)
         await interaction.response.send_message("✅ Đã lưu cấu hình thành công.", ephemeral=True)
 
-
 class SetupView(View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SetupSelect())
 
-
 @bot.event
 async def on_ready():
     global views_registered
     if not views_registered:
-        for persistent_view in (TicketPanelView(), CloseTicketView(), RoleView(), OnboardingView(), UnlockView(), SetupView()):
+        for persistent_view in (TicketPanelView(), CloseTicketView(), RoleView(), UnlockView(), SetupView()):
             bot.add_view(persistent_view)
         views_registered = True
         
@@ -349,7 +349,6 @@ async def on_ready():
         print(f"✅ Bot sẵn sàng: {bot.user} | Đồng bộ {len(synced)} lệnh")
     except Exception as e:
         print(f"⚠️ Lỗi đồng bộ lệnh: {e}")
-
 
 @tasks.loop(hours=24)
 async def check_birthdays():
@@ -370,11 +369,9 @@ async def check_birthdays():
                 if member:
                     await channel.send(content=f"🎂 Chúc mừng sinh nhật {member.mention}!", embed=embed("CHÚC MỪNG SINH NHẬT!", "Chúc bạn một ngày thật vui vẻ và hạnh phúc! 🎈", 0xFF73FA))
 
-
 @check_birthdays.before_loop
 async def before_birthdays():
     await bot.wait_until_ready()
-
 
 @bot.event
 async def on_message(message):
@@ -395,7 +392,6 @@ async def on_message(message):
             pass
     await bot.process_commands(message)
 
-
 @bot.event
 async def on_member_join(member):
     channel = get_channel(member.guild, "welcome_channel_id")
@@ -411,7 +407,6 @@ async def on_member_join(member):
         message.set_thumbnail(url=member.display_avatar.url)
     await channel.send(embed=message)
 
-
 @bot.event
 async def on_member_remove(member):
     channel = get_channel(member.guild, "goodbye_channel_id")
@@ -425,25 +420,25 @@ async def on_member_remove(member):
         message.set_image(url=img_url)
     await channel.send(embed=message)
 
-
 @bot.tree.command(name="setup", description="Bảng cài đặt cấu hình Bot")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_command(interaction):
     values = "\n".join(f"`{key}`: `{get_config(key) or 'Chưa cài'}`" for key in DEFAULT_CONFIG if key.endswith("_id"))
     await interaction.response.send_message(embed=embed("BẢNG CẤU HÌNH BOT", values), view=SetupView(), ephemeral=True)
 
-
 @bot.tree.command(name="setwelcome", description="Chỉnh sửa nội dung và URL ảnh chào mừng")
 @app_commands.checks.has_permissions(administrator=True)
 async def setwelcome(interaction: discord.Interaction):
     await interaction.response.send_modal(WelcomeModal())
-
 
 @bot.tree.command(name="setgoodbye", description="Chỉnh sửa nội dung và URL ảnh tạm biệt")
 @app_commands.checks.has_permissions(administrator=True)
 async def setgoodbye(interaction: discord.Interaction):
     await interaction.response.send_modal(GoodbyeModal())
 
+@bot.tree.command(name="setmc", description="Cài đặt thông tin server Minecraft của bạn cho bot")
+async def setmc(interaction: discord.Interaction):
+    await interaction.response.send_modal(MinecraftConfigModal())
 
 @bot.tree.command(name="weekly_chatters", description="Xem những người chat nhiều nhất trong tuần")
 @app_commands.describe(limit="Số người muốn hiển thị, từ 1 đến 20")
@@ -468,13 +463,9 @@ async def weekly_chatters(interaction: discord.Interaction, limit: app_commands.
     if not rows:
         return await interaction.response.send_message("📊 Chưa có dữ liệu chat trong tuần này.", ephemeral=True)
 
-    lines = [
-        f"**{index}.** <@{user_id}> — `{msgs:,}` tin nhắn"
-        for index, (user_id, msgs) in enumerate(rows, start=1)
-    ]
+    lines = [f"**{index}.** <@{user_id}> — `{msgs:,}` tin nhắn" for index, (user_id, msgs) in enumerate(rows, start=1)]
     message = f"📊 **THỐNG KÊ TUẦN ({week_key})**\n\n" + "\n".join(lines)
     await interaction.response.send_message(embed=embed("THỐNG KÊ CHAT TUẦN", message, 0x5865F2))
-
 
 @bot.tree.command(name="birthday", description="Đăng ký sinh nhật")
 @app_commands.describe(date="Định dạng DD/MM/YYYY")
@@ -495,15 +486,6 @@ async def birthday(interaction, date: str):
 
     await interaction.response.send_message(f"✅ Đã lưu sinh nhật: **{formatted_date}**", ephemeral=True)
 
-
-@bot.tree.command(name="mc_status", description="Kiểm tra trạng thái bot Minecraft AFK")
-async def mc_status(interaction: discord.Interaction):
-    e = discord.Embed(title="『 ⛏️ MINECRAFT BOT STATUS 』", description="Bot Minecraft đang chạy ngầm trên cùng hệ thống Cloud.", color=0x57F287)
-    e.add_field(name="Trạng thái", value="`🟢 Active / Online`", inline=True)
-    e.set_footer(text="Hệ thống quản lý Bot | ph.huyy")
-    await interaction.response.send_message(embed=e)
-
-
 @bot.tree.command(name="mc", description="Điều khiển bot Minecraft từ Discord")
 @app_commands.describe(action="Hành động", message="Nội dung chat (nếu có)")
 @app_commands.choices(action=[
@@ -520,7 +502,6 @@ async def mc_command(interaction: discord.Interaction, action: str, message: str
     conn.close()
     
     await interaction.response.send_message(f"✅ Đã gửi lệnh `!{action} {message}` xuống bot Minecraft!", ephemeral=True)
-
 
 @bot.tree.command(name="play", description="Phát nhạc từ YouTube hoặc Spotify")
 @app_commands.describe(search="Tên bài hát hoặc Link")
@@ -551,7 +532,6 @@ async def play(interaction: discord.Interaction, search: str):
     if not vc.playing:
         await vc.play(vc.queue.get())
 
-
 @bot.tree.command(name="skip", description="Bỏ qua bài hát hiện tại")
 async def skip(interaction: discord.Interaction):
     vc: wavelink.Player = interaction.guild.voice_client
@@ -559,7 +539,6 @@ async def skip(interaction: discord.Interaction):
         return await interaction.response.send_message("❌ Không có bài hát nào đang phát.", ephemeral=True)
     await vc.stop()
     await interaction.response.send_message("⏭️ Đã bỏ qua bài hát hiện tại!")
-
 
 @bot.tree.command(name="stop", description="Dừng nhạc và thoát Voice")
 async def stop(interaction: discord.Interaction):
@@ -569,8 +548,6 @@ async def stop(interaction: discord.Interaction):
     await vc.disconnect()
     await interaction.response.send_message("⏹️ Đã dừng nhạc và ngắt kết nối!")
 
-
-# --- Tích hợp Flask Web Server ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -581,8 +558,6 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-
-# --- Hàm khởi chạy tiến trình Node.js (Minecraft Bot) ---
 def run_minecraft_bot():
     if os.path.exists("bot.js"):
         try:
@@ -592,7 +567,6 @@ def run_minecraft_bot():
             print(f"⚠️ Không thể khởi chạy tiến trình Node.js: {e}")
     else:
         print("⚠️ Không tìm thấy file bot.js, bỏ qua khởi động Minecraft bot.")
-
 
 if __name__ == "__main__":
     t = Thread(target=run_web, daemon=True)
