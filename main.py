@@ -461,4 +461,24 @@ async def on_command_error(ctx, error):
         await ctx.send(f"❌ Lỗi: {error}", delete_after=5)
 
 
+from flask import Flask
+from threading import Thread
+import os
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    # Render cung cấp biến PORT tự động, mặc định dùng cổng 10000
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Khởi chạy web server phụ để đánh lừa Render rằng đây là một trang web
+t = Thread(target=run)
+t.start()
+
+# Dòng chạy bot gốc của bạn giữ nguyên ở dưới đây
 bot.run(TOKEN)
