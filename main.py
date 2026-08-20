@@ -492,7 +492,8 @@ async def birthday(interaction, date: str):
     app_commands.Choice(name="chat", value="chat"),
     app_commands.Choice(name="come", value="come"),
     app_commands.Choice(name="stop", value="stop"),
-    app_commands.Choice(name="status", value="status")
+    app_commands.Choice(name="status", value="status"),
+    app_commands.Choice(name="eat", value="eat")
 ])
 async def mc_command(interaction: discord.Interaction, action: str, message: str = ""):
     conn = sqlite3.connect(DB_FILE)
