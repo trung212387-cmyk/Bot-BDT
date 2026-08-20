@@ -1,0 +1,8 @@
+{
+  "name": "minecraft-discord-bot",
+  "version": "1.0.0",
+  "dependencies": {
+    "mineflayer": "^4.20.0",
+    "sqlite3": "^5.1.7"
+  }
+}
