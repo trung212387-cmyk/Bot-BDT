@@ -1,6 +1,7 @@
 const mineflayer = require('mineflayer');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { mineflayer: mineflayerViewer } = require('prismarine-viewer');
 
 const dbPath = path.resolve(__dirname, 'bot_database.db');
 
@@ -32,6 +33,14 @@ function connectDynamicBot() {
 
         bot.on('spawn', () => {
             console.log("🤖 Bot Minecraft đã vào game thành công!");
+            
+            try {
+                mineflayerViewer(bot, { port: 3000, firstPerson: true });
+                console.log("🌐 Đã mở Góc nhìn Bot tại: http://localhost:3000");
+            } catch (e) {
+                console.log("⚠️ Không thể khởi chạy Web Viewer:", e.message);
+            }
+
             startCommandListener(bot);
         });
 
@@ -66,6 +75,26 @@ function startCommandListener(bot) {
                     bot.chat("Đã dừng mọi hành động.");
                 } else if (row.command === 'status') {
                     bot.chat(`Máu hiện tại: ${bot.health}/20, Độ đói: ${bot.food}/20`);
+                } else if (row.command === 'eat') {
+                    const foodItem = bot.inventory.items().find(item => item.foodPoints > 0);
+                    
+                    if (foodItem) {
+                        bot.equip(foodItem, 'hand', (err) => {
+                            if (err) {
+                                bot.chat("Không thể cầm thức ăn lên tay!");
+                                return;
+                            }
+                            bot.consume((err) => {
+                                if (err) {
+                                    bot.chat("Không thể ăn lúc này!");
+                                } else {
+                                    bot.chat(`Đã ăn ${foodItem.name} thành công! Độ đói: ${bot.food}/20`);
+                                }
+                            });
+                        });
+                    } else {
+                        bot.chat("Trong túi của tôi không còn đồ ăn nào cả!");
+                    }
                 }
             } else {
                 db.close();
@@ -75,4 +104,3 @@ function startCommandListener(bot) {
 }
 
 connectDynamicBot();
-createBot();
