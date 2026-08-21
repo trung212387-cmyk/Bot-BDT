@@ -32,7 +32,6 @@ def init_db():
             value TEXT
         )
     """)
-    # Bảng lưu ngày sinh thống nhất cho cả chức năng Verify và Chúc mừng sinh nhật
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_birthdays (
             user_id TEXT PRIMARY KEY,
@@ -108,7 +107,7 @@ def get_user_birthday(user_id):
     return row[0] if row else None
 
 
-# --- HỆ THỐNG VERIFY (NÚT BẤM & MODAL) ---
+# --- HỆ THỐNG XÁC THỰC BẢO MẬT ---
 
 def generate_random_code(length=6):
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -117,13 +116,25 @@ def generate_random_code(length=6):
 temp_verify_codes = {}
 
 
-class DirectVerifyModal(Modal):
-    def __init__(self, code: str):
-        super().__init__(title="🔐 Xác Thực Mở Khóa Kênh")
+class UnifiedVerifyModal(Modal):
+    def __init__(self, needs_birthday: bool, code: str):
+        super().__init__(title="🔐 Xác Thực & Đăng Ký Bảo Mật")
+        self.needs_birthday = needs_birthday
         self.code = code
+
+        if self.needs_birthday:
+            self.date_input = TextInput(
+                label="1. Ngày tháng năm sinh của bạn",
+                placeholder="Định dạng: DD/MM/YYYY (Ví dụ: 15/08/2008)",
+                style=discord.TextStyle.short,
+                required=True,
+                max_length=15,
+            )
+            self.add_item(self.date_input)
+
         self.code_input = TextInput(
             label=f"Mã xác thực của bạn là: [{code}]",
-            placeholder="Nhập lại chính xác mã ở trên vào đây...",
+            placeholder="Nhập lại chính xác mã phía trên vào đây...",
             style=discord.TextStyle.short,
             required=True,
             max_length=10,
@@ -137,10 +148,32 @@ class DirectVerifyModal(Modal):
 
         if not correct_code or entered_code != correct_code:
             return await interaction.response.send_message(
-                "❌ Mã không chính xác! Vui lòng bấm lại nút Verify để lấy mã mới.",
+                "❌ Mã xác thực không chính xác hoặc đã hết hạn! Vui lòng bấm lại nút Verify để nhận mã mới.",
                 ephemeral=True,
             )
 
+        # Nếu người dùng chưa có ngày sinh thì xử lý lưu ngày sinh luôn tại đây
+        if self.needs_birthday:
+            date_str = self.date_input.value.strip()
+            try:
+                parsed = datetime.strptime(date_str, "%d/%m/%Y")
+            except ValueError:
+                return await interaction.response.send_message(
+                    "❌ Sai định dạng ngày sinh! Vui lòng nhập đúng mẫu: `DD/MM/YYYY` (Ví dụ: 25/12/2008).",
+                    ephemeral=True,
+                )
+            
+            formatted_date = parsed.strftime("%d/%m/%Y")
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO user_birthdays (user_id, birthday) VALUES (?, ?)",
+                (str(user_id), formatted_date),
+            )
+            conn.commit()
+            conn.close()
+
+        # Kiểm tra và cấp role mở khóa
         role_id = get_config("unlock_role_id")
         role = interaction.guild.get_role(role_id) if role_id else None
         if not role:
@@ -152,6 +185,7 @@ class DirectVerifyModal(Modal):
         try:
             if role not in interaction.user.roles:
                 await interaction.user.add_roles(role)
+            
             await interaction.response.send_message(
                 f"✅ Xác thực thành công! Đã cấp role {role.mention} và mở khóa toàn bộ kênh cho bạn.",
                 ephemeral=True,
@@ -161,6 +195,42 @@ class DirectVerifyModal(Modal):
             await interaction.response.send_message(
                 "❌ Bot không đủ quyền trao role này.", ephemeral=True
             )
+
+
+class BirthdayModal(Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
+    date_input = TextInput(
+        label="Nhập ngày tháng năm sinh của bạn",
+        placeholder="Định dạng: DD/MM/YYYY (Ví dụ: 15/08/2008)",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=15,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        date_str = self.date_input.value.strip()
+        try:
+            parsed = datetime.strptime(date_str, "%d/%m/%Y")
+        except ValueError:
+            return await interaction.response.send_message(
+                "❌ Sai định dạng! Vui lòng nhập đúng mẫu: `DD/MM/YYYY` (Ví dụ: 25/12/2008).",
+                ephemeral=True,
+            )
+
+        user_id = str(interaction.user.id)
+        formatted_date = parsed.strftime("%d/%m/%Y")
+
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO user_birthdays (user_id, birthday) VALUES (?, ?)",
+            (user_id, formatted_date),
+        )
+        conn.commit()
+        conn.close()
+
+        await interaction.response.send_message(
+            "✅ Đã lưu ngày sinh thành công!", ephemeral=True
+        )
 
 
 class VerifyButtonView(View):
@@ -173,13 +243,6 @@ class VerifyButtonView(View):
         custom_id="persistent_verify_button"
     )
     async def verify_button_callback(self, interaction: discord.Interaction, button: Button):
-        saved_birthday = get_user_birthday(interaction.user.id)
-        if not saved_birthday:
-            return await interaction.response.send_message(
-                "❌ Bạn chưa cung cấp ngày sinh! Vui lòng sử dụng lệnh `/set_birthday [DD/MM/YYYY]` trước khi tiến hành Verify.",
-                ephemeral=True,
-            )
-
         role_id = get_config("unlock_role_id")
         role = interaction.guild.get_role(role_id) if role_id else None
         
@@ -188,9 +251,16 @@ class VerifyButtonView(View):
                 "❌ Bạn đã được xác thực từ trước rồi!", ephemeral=True
             )
 
+        saved_birthday = get_user_birthday(interaction.user.id)
         new_code = generate_random_code()
         temp_verify_codes[interaction.user.id] = new_code
-        await interaction.response.send_modal(DirectVerifyModal(new_code))
+
+        # Nếu chưa có ngày sinh, hiển thị modal tích hợp cả 2 ô (Ngày sinh + Mã xác thực)
+        if not saved_birthday:
+            return await interaction.response.send_modal(UnifiedVerifyModal(needs_birthday=True, code=new_code))
+        
+        # Nếu đã có ngày sinh từ trước, chỉ hiển thị modal nhập mã xác thực
+        return await interaction.response.send_modal(UnifiedVerifyModal(needs_birthday=False, code=new_code))
 
 
 class SetupVerifyRoleSelect(RoleSelect):
@@ -395,7 +465,7 @@ class ConfigModal(Modal):
                     title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
                     description=(
                         "Chào mừng bạn đến với máy chủ!\n\n"
-                        "⚠️ **Lưu ý:** Bạn bắt buộc phải đăng ký ngày sinh bằng lệnh `/set_birthday` trước khi bấm nút xác thực bên dưới."
+                        "⚠️ **Hướng dẫn:** Bấm vào nút bên dưới để tiến hành xác thực tài khoản một cách bảo mật."
                     ),
                     color=0x57F287
                 )
@@ -540,7 +610,8 @@ async def help_command(interaction: discord.Interaction):
             "• `/ban [thành viên] [lý do]` - Khóa vĩnh viễn thành viên\n"
             "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời\n"
             "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify\n"
-            "• `/set_birthday [DD/MM/YYYY]` - Đăng ký ngày sinh nhật cá nhân"
+            "• `/verify` hoặc `/verify_panel` - Mở bảng xác thực hoặc gửi bảng nút bấm\n"
+            "• `/set_birthday` - Mở bảng điền ngày sinh bảo mật (riêng tư)"
         ),
         inline=False,
     )
@@ -562,6 +633,45 @@ async def help_command(interaction: discord.Interaction):
     em.timestamp = datetime.now()
 
     await interaction.response.send_message(embed=em, ephemeral=True)
+
+
+@bot.tree.command(name="verify", description="Mở bảng xác thực bảo mật riêng tư cho bạn")
+async def verify_command(interaction: discord.Interaction):
+    role_id = get_config("unlock_role_id")
+    role = interaction.guild.get_role(role_id) if role_id else None
+    
+    if role and role in interaction.user.roles:
+        return await interaction.response.send_message(
+            "❌ Bạn đã được xác thực từ trước rồi!", ephemeral=True
+        )
+
+    saved_birthday = get_user_birthday(interaction.user.id)
+    new_code = generate_random_code()
+    temp_verify_codes[interaction.user.id] = new_code
+
+    if not saved_birthday:
+        return await interaction.response.send_modal(UnifiedVerifyModal(needs_birthday=True, code=new_code))
+    
+    return await interaction.response.send_modal(UnifiedVerifyModal(needs_birthday=False, code=new_code))
+
+
+@bot.tree.command(name="verify_panel", description="Gửi khung bảng nút bấm xác thực vào kênh hiện tại")
+@app_commands.checks.has_permissions(administrator=True)
+async def verify_panel(interaction: discord.Interaction):
+    embed_msg = discord.Embed(
+        title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
+        description=(
+            "Chào mừng bạn đến với máy chủ!\n\n"
+            "⚠️ **Hướng dẫn:**\n"
+            "• Bấm vào nút **🔐 Xác Thực Ngay** bên dưới.\n"
+            "• Điền thông tin vào bảng bảo mật riêng tư hiện lên để xác thực hoàn tất."
+        ),
+        color=0x57F287
+    )
+    embed_msg.set_footer(text="Hệ thống bảo mật tự động")
+    
+    await interaction.channel.send(embed=embed_msg, view=VerifyButtonView())
+    await interaction.response.send_message("✅ Đã gửi bảng Verify thành công vào kênh này!", ephemeral=True)
 
 
 @bot.tree.command(name="setup", description="Bảng cài đặt cấu hình Bot")
@@ -681,27 +791,9 @@ async def weekly_chatters(interaction: discord.Interaction, limit: app_commands.
     await interaction.response.send_message(embed=embed("THỐNG KÊ CHAT TUẦN", message, 0x5865F2))
 
 
-@bot.tree.command(name="set_birthday", description="Đăng ký ngày tháng năm sinh cá nhân")
-@app_commands.describe(date="Nhập theo định dạng DD/MM/YYYY")
-async def set_birthday(interaction: discord.Interaction, date: str):
-    try:
-        parsed = datetime.strptime(date.strip(), "%d/%m/%Y")
-    except ValueError:
-        return await interaction.response.send_message("❌ Sai định dạng! Vui lòng nhập theo định dạng: `DD/MM/YYYY` (Ví dụ: 25/12/2008).", ephemeral=True)
-
-    user_id = str(interaction.user.id)
-    formatted_date = parsed.strftime("%d/%m/%Y")
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO user_birthdays (user_id, birthday) VALUES (?, ?)",
-        (user_id, formatted_date),
-    )
-    conn.commit()
-    conn.close()
-
-    await interaction.response.send_message(f"✅ Đã cập nhật thành công ngày sinh của bạn: **{formatted_date}**. Giờ đây bạn đã có thể tiến hành bấm nút **Verify**!", ephemeral=True)
+@bot.tree.command(name="set_birthday", description="Mở bảng bảo mật để đăng ký ngày tháng năm sinh cá nhân")
+async def set_birthday(interaction: discord.Interaction):
+    await interaction.response.send_modal(BirthdayModal())
 
 
 # --- WEB SERVER (FLASK) ---
