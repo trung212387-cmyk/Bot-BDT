@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 import random
+import string
 import sqlite3
 from threading import Thread
 
@@ -56,7 +57,10 @@ init_db()
 
 DEFAULT_CONFIG = {
     "welcome_channel_id": None,
-    "welcome_image": "",
+    "welcome_image": (
+        "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=1000"
+        " &auto=format&fit=crop"
+    ),  # Ảnh mặc định cyberpunk phong cách
     "welcome_message": (
         "Chào mừng {user} đã gia nhập **{server}**!\n\n▫️ **Tài khoản:**"
         " {name}\n▫️ **Thành viên thứ:** `{count}`"
@@ -66,7 +70,6 @@ DEFAULT_CONFIG = {
     "self_role_id": None,
     "birthday_channel_id": None,
     "unlock_role_id": None,
-    "verify_code": "123456",
 }
 
 
@@ -97,13 +100,20 @@ def set_config(key, value):
   conn.close()
 
 
+# Hàm tạo mã ngẫu nhiên cho tính năng Verify
+def generate_random_code(length=6):
+  return "".join(
+      random.choices(string.ascii_uppercase + string.digits, k=length)
+  )
+
+
+# Biến tạm lưu mã verify của từng người dùng
+temp_verify_codes = {}
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-active_trivia = {}
-active_drop_ff = {}
 
 
 def embed(title, description, color=0x5865F2):
@@ -275,22 +285,23 @@ class RoleView(View):
       )
 
 
-class VerifyModal(Modal, title="🔐 Nhập Mã Xác Thực Server"):
+class VerifyModal(Modal, title="🔐 Nhập Mã Xác Thực Ngẫu Nhiên"):
   code_input = TextInput(
-      label="Mã xác thực",
-      placeholder="Nhập mã xác thực của bạn vào đây...",
+      label="Mã xác thực của bạn",
+      placeholder="Nhập chính xác mã vừa nhận vào đây...",
       style=discord.TextStyle.short,
       required=True,
-      max_length=50,
+      max_length=10,
   )
 
   async def on_submit(self, interaction: discord.Interaction):
-    entered_code = self.code_input.value.strip()
-    correct_code = str(get_config("verify_code") or "123456")
+    user_id = interaction.user.id
+    entered_code = self.code_input.value.strip().upper()
+    correct_code = temp_verify_codes.get(user_id)
 
-    if entered_code != correct_code:
+    if not correct_code or entered_code != correct_code:
       return await interaction.response.send_message(
-          "❌ Mã xác thực không chính xác! Vui lòng kiểm tra lại.",
+          "❌ Mã không chính xác hoặc đã hết hạn! Vui lòng bấm nút Verify lại.",
           ephemeral=True,
       )
 
@@ -308,6 +319,7 @@ class VerifyModal(Modal, title="🔐 Nhập Mã Xác Thực Server"):
       await interaction.response.send_message(
           f"✅ Xác thực thành công! Đã cấp role {role.mention}.", ephemeral=True
       )
+      temp_verify_codes.pop(user_id, None)
     except discord.Forbidden:
       await interaction.response.send_message(
           "❌ Bot không đủ quyền trao role này.", ephemeral=True
@@ -320,12 +332,19 @@ class UnlockView(View):
     super().__init__(timeout=None)
 
   @discord.ui.button(
-      label="🔓 Xác Nhận / Mở Khóa Kênh",
+      label="🔓 Bắt Đầu Xác Thực",
       style=discord.ButtonStyle.success,
       custom_id="unlock_channels_button",
   )
   async def unlock(self, interaction: discord.Interaction, button: Button):
-    await interaction.response.send_modal(VerifyModal())
+    new_code = generate_random_code()
+    temp_verify_codes[interaction.user.id] = new_code
+
+    await interaction.response.send_message(
+        f"⚡ **Mã xác thực ngẫu nhiên của bạn là: `{new_code}`**\n*(Hãy nhớ mã này và nhập vào khung bên dưới)*",
+        ephemeral=True,
+    )
+    await interaction.followup.send_modal(VerifyModal())
 
 
 class SetupVerifyRoleSelect(RoleSelect):
@@ -370,9 +389,7 @@ class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
   async def on_submit(self, interaction: discord.Interaction):
     set_config("welcome_message", self.msg_input.value.strip())
     await interaction.response.send_message(
-        "✅ Đã cập nhật nội dung chào mừng! (Hãy dùng lệnh `/setwelcome` kèm"
-        " đính kèm ảnh nếu muốn đổi hình ảnh)",
-        ephemeral=True,
+        "✅ Đã cập nhật nội dung chào mừng!", ephemeral=True
     )
 
 
@@ -467,322 +484,6 @@ class SetupView(View):
   def __init__(self):
     super().__init__(timeout=None)
     self.add_item(SetupSelect())
-
-
-class GameSelectView(View):
-
-  def __init__(self):
-    super().__init__(timeout=60)
-
-  @discord.ui.button(
-      label="Liên Quân Mobile",
-      style=discord.ButtonStyle.primary,
-      emoji="⚔️",
-      custom_id="game_lienquan",
-  )
-  async def lienquan_button(
-      self, interaction: discord.Interaction, button: Button
-  ):
-    await self.start_trivia(interaction, "lienquan")
-
-  @discord.ui.button(
-      label="Valorant",
-      style=discord.ButtonStyle.secondary,
-      emoji="🎯",
-      custom_id="game_valorant",
-  )
-  async def valorant_button(
-      self, interaction: discord.Interaction, button: Button
-  ):
-    await self.start_trivia(interaction, "valorant")
-
-  @discord.ui.button(
-      label="Roblox",
-      style=discord.ButtonStyle.success,
-      emoji="🤖",
-      custom_id="game_roblox",
-  )
-  async def roblox_button(
-      self, interaction: discord.Interaction, button: Button
-  ):
-    await self.start_trivia(interaction, "roblox")
-
-  async def start_trivia(self, interaction: discord.Interaction, game_type: str):
-    channel_id = interaction.channel.id
-
-    if channel_id in active_trivia:
-      await interaction.response.send_message(
-          "⚠️ Đã có câu đố đang diễn ra ở kênh này rồi!", ephemeral=True
-      )
-      return
-
-    games_data = {
-        "lienquan": [
-            (
-                "Nakroth (Sát Thủ Đi Rừng)",
-                ["nakroth", "nak", "nạc rốt"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Nakroth/avatar.png"
-                ),
-                "Sát thủ cơ động, đi rừng thần tốc.",
-            ),
-            (
-                "Florentino (Đấu Sĩ Hoa Mỹ)",
-                ["florentino", "flo", "phloren"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Florentino/avatar.png"
-                ),
-                "Đấu sĩ hoa mỹ với những điệu nhảy nhặt hoa.",
-            ),
-            (
-                "Elsu (Xạ Thủ Tầm Xa)",
-                ["elsu", "eo su"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Elsu/avatar.png"
-                ),
-                "Xạ thủ cấu rỉa tầm xa với Viễn Trình Kích.",
-            ),
-            (
-                "Tulen (Pháp Sư Lôi Điện)",
-                ["tulen", "tu len"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Tulen/avatar.png"
-                ),
-                "Pháp sư dồn sát thương cực mạnh với lôi điện.",
-            ),
-            (
-                "Violet (Xạ Thủ Chí Mạng)",
-                ["violet", "vịt", "vân"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Violet/avatar.png"
-                ),
-                "Xạ thủ lăn lộn bắn chí mạng biểu tượng của Liên Quân.",
-            ),
-            (
-                "Raz (Quyền Vương)",
-                ["raz", "rát"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Raz/avatar.png"
-                ),
-                "Đấu sĩ/Sát thủ quyền vương đẩy lùi kẻ địch mạnh mẽ.",
-            ),
-            (
-                "Hayate (Ninja Sát Thương Chuẩn)",
-                ["hayate", "hải", "haya"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Hayate/avatar.png"
-                ),
-                "Xạ thủ sát thương chuẩn cơ động bậc nhất.",
-            ),
-            (
-                "Maloch (Ma Vương Quỷ Kiếm)",
-                ["maloch", "mã lộc"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Maloch/avatar.png"
-                ),
-                "Đại tướng quỷ chém ra sát thương chuẩn diện rộng.",
-            ),
-            (
-                "Lauriel (Đại Thiên Sứ)",
-                ["lauriel", "lơ ri el"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Lauriel/avatar.png"
-                ),
-                "Đại thiên sứ múa trong vòng tròn giảm hồi chiêu.",
-            ),
-            (
-                "Ryoma (Kiếm Sĩ Đâm Xa)",
-                ["ryoma", "rô ma"],
-                (
-                    "https://raw.githubusercontent.com/AOV-Wiki/assets/main/heroes/Ryoma/avatar.png"
-                ),
-                "Kiếm khách đâm kiếm tầm xa cấu rỉa cực khó chịu.",
-            ),
-        ],
-        "valorant": [
-            (
-                "Jett (Đặc Vụ Gió Lướt)",
-                ["jett", "vét", "dét"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/5/5a/Jett_icon.png"
-                ),
-                "Đặc vụ lướt và bay trên không cực kỳ linh hoạt.",
-            ),
-            (
-                "Reyna (Nữ Hoàng Hút Máu)",
-                ["reyna", "rây na", "rayna"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/b/b0/Reyna_icon.png"
-                ),
-                "Nữ hoàng hút máu, càng hạ gục càng mạnh mẽ.",
-            ),
-            (
-                "Sage (Hộ Vệ Tường Băng)",
-                ["sage", "sếch", "sây gi"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/7/71/Sage_icon.png"
-                ),
-                "Hộ vệ dựng tường băng bảo vệ và hồi sinh đồng đội.",
-            ),
-            (
-                "Omen (Bóng Ma Đen Tối)",
-                ["omen", "ô mên"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/b/b2/Omen_icon.png"
-                ),
-                "Bóng ma dịch chuyển không tiếng động và tạo khói tối.",
-            ),
-            (
-                "Viper (Chuyên Gia Độc Dược)",
-                ["viper", "vai pơ"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/3/33/Viper_icon.png"
-                ),
-                "Chuyên gia độc dược tạo tường khí độc kiểm soát bản đồ.",
-            ),
-            (
-                "Phoenix (Đặc Vụ Lửa)",
-                ["phoenix", "phê lích", "phượng hoàng"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/7/77/Phoenix_icon.png"
-                ),
-                "Sử dụng sức mạnh lửa để hồi máu và tự hồi sinh.",
-            ),
-            (
-                "Chamber (Nhà Quý Tôn Súng Ngắm)",
-                ["chamber", "chêm bơ", "ông chú súng ngắm"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/2/27/Chamber_icon.png"
-                ),
-                "Nhà chế tạo vũ khí hào hoa với súng ngắm tối thượng.",
-            ),
-            (
-                "Cypher (Trinh Sát Camera)",
-                ["cypher", "sai phơ", "ciph"],
-                (
-                    "https://static.wikia.nocookie.net/valorant/images/9/98/Cypher_icon.png"
-                ),
-                "Trinh sát giăng camera và bẫy dây theo dõi kẻ địch.",
-            ),
-        ],
-        "roblox": [
-            (
-                "Noob (Biểu Tượng Vàng Xanh)",
-                ["noob", "núp", "núp lùm"],
-                (
-                    "https://tr.rbxcdn.com/30day-AvatarHeadshot-BEEF3C34F90F0C05D5D18742DE435649-Png/150/150/AvatarHeadshot/noFilter"
-                ),
-                "Biểu tượng kinh điển mang sắc áo vàng xanh của Roblox.",
-            ),
-            (
-                "Trái Ác Quỷ Blox Fruits",
-                ["blox fruits", "bloxfruits", "trái ác quỷ", "blox fruit"],
-                (
-                    "https://images.rbxcdn.com/7b1c31405e199d75b3648679f291e0a2"
-                ),
-                "Tựa game hải tặc cày cuốc trái ác quỷ đình đám trên Roblox.",
-            ),
-            (
-                "Guest (Khách Vãng Lai)",
-                ["guest", "gét", "khách vãng lai"],
-                (
-                    "https://tr.rbxcdn.com/30day-AvatarHeadshot-7362C04B4582E51D0C44053B5D3457D4-Png/150/150/AvatarHeadshot/noFilter"
-                ),
-                "Hình mẫu khách vãng lai huyền thoại trong lịch sử Roblox.",
-            ),
-            (
-                "Robux (Tiền Tệ Roblox)",
-                ["robux", "rbx", "rô bักซ", "tiền robux"],
-                (
-                    "https://images.rbxcdn.com/978000490b4d45cbe273f5a2e9b97a22"
-                ),
-                "Đơn vị tiền tệ chính thức và cao cấp trong thế giới Roblox.",
-            ),
-            (
-                "Builderman (Nhà Sáng Lập)",
-                ["builderman", "đại diện roblox", "nhà sáng lập"],
-                (
-                    "https://tr.rbxcdn.com/30day-AvatarHeadshot-95383AE11BD693B8933273D1E9DE80D9-Png/150/150/AvatarHeadshot/noFilter"
-                ),
-                "Nhà sáng lập và gương mặt đại diện quen thuộc của Roblox.",
-            ),
-        ],
-    }
-
-    item_name, accepted_answers, image_url, hint = random.choice(
-        games_data[game_type]
-    )
-    active_trivia[channel_id] = accepted_answers
-
-    game_titles = {
-        "lienquan": "LIÊN QUÂN MOBILE",
-        "valorant": "VALORANT",
-        "roblox": "ROBLOX",
-    }
-
-    embed_msg = discord.Embed(
-        title=(
-            "🎮 MINIGAME: ĐOÁN NHÂN VẬT / VẬT PHẨM"
-            f" ({game_titles[game_type]})"
-        ),
-        description=(
-            "Quan sát hình ảnh bên dưới và đoán xem đây là nhân vật hoặc vật"
-            " phẩm gì!\n\n*(Gõ đáp án tiếng Việt trực tiếp vào khung chat)*"
-        ),
-        color=0x3498DB,
-    )
-    embed_msg.set_image(url=image_url)
-    embed_msg.add_field(name="💡 Gợi ý hệ thống", value=hint, inline=False)
-    embed_msg.set_footer(text="Thời gian trả lời: 30 giây!")
-
-    await interaction.response.edit_message(
-        content=None, embed=embed_msg, view=None
-    )
-
-    def check(msg: discord.Message):
-      return (
-          msg.channel.id == channel_id
-          and not msg.author.bot
-          and msg.content.lower().strip() in active_trivia[channel_id]
-      )
-
-    try:
-      msg = await bot.wait_for("message", timeout=30.0, check=check)
-      if channel_id in active_trivia:
-        del active_trivia[channel_id]
-
-      success_embed = discord.Embed(
-          title="🎉 CHÍNH XÁC!",
-          description=(
-              f"Chúc mừng **{msg.author.mention}** đã trả lời đúng nhanh nhất!"
-              f"\n🎁 **Phần thưởng:** Được cộng thêm **5 lần đoán** cho các"
-              f" vòng tiếp theo!"
-          ),
-          color=0x2ECC71,
-      )
-      success_embed.add_field(
-          name="✨ Tên chính xác", value=f"**{item_name}**", inline=False
-      )
-      success_embed.set_image(url=image_url)
-      await msg.channel.send(embed=success_embed)
-
-    except asyncio.TimeoutError:
-      if channel_id in active_trivia:
-        del active_trivia[channel_id]
-
-      timeout_embed = discord.Embed(
-          title="⏰ HẾT GIỜ!",
-          description=(
-              "Tiếc quá, không có ai đưa ra đáp án chính xác trong thời gian"
-              " quy định."
-          ),
-          color=0xE74C3C,
-      )
-      timeout_embed.add_field(
-          name="🔑 Đáp án đúng là", value=f"**{item_name}**", inline=False
-      )
-      timeout_embed.set_image(url=image_url)
-      await interaction.followup.send(embed=timeout_embed)
 
 
 @bot.event
@@ -899,22 +600,12 @@ async def help_command(interaction: discord.Interaction):
     em.set_thumbnail(url=bot.user.avatar.url)
 
   em.add_field(
-      name="🕹️ **Minigame & Xác Thực**",
-      value=(
-          "• `/doantuong` - Chơi minigame đoán nhân vật game\n"
-          "• `/drop_ff` - Minigame quay drop phần thưởng/nhân vật Free Fire\n"
-          "• `/verify` - Gửi khung nút bấm xác nhận kênh\n"
-          "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify\n"
-          "• `/setup_verify_code` - Đặt mã code để người dùng nhập khi verify"
-      ),
-      inline=False,
-  )
-
-  em.add_field(
-      name="🛡️ **Quản Trị (Moderation)**",
+      name="🛡️ **Quản Trị (Moderation) & Xác Thực**",
       value=(
           "• `/ban [thành viên] [lý do]` - Khóa vĩnh viễn thành viên\n"
-          "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời"
+          "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời\n"
+          "• `/verify` - Gửi khung nút bấm xác nhận kênh\n"
+          "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify"
       ),
       inline=False,
   )
@@ -981,19 +672,6 @@ async def setup_verify(interaction: discord.Interaction):
 
 
 @bot.tree.command(
-    name="setup_verify_code", description="Thay đổi mã code yêu cầu khi Verify"
-)
-@app_commands.describe(code="Mã code mới (ví dụ: KimNgoc2026)")
-@app_commands.checks.has_permissions(administrator=True)
-async def setup_verify_code(interaction: discord.Interaction, code: str):
-  set_config("verify_code", code.strip())
-  await interaction.response.send_message(
-      f"✅ Đã cập nhật mã xác thực mới thành công: **`{code.strip()}`**",
-      ephemeral=True,
-  )
-
-
-@bot.tree.command(
     name="verify", description="Gửi khung nút bấm xác nhận/mở khóa kênh"
 )
 @app_commands.checks.has_permissions(administrator=True)
@@ -1001,8 +679,8 @@ async def verify_command(interaction: discord.Interaction):
   em = discord.Embed(
       title="🔐 XÁC NHẬN MỞ KHÓA MÁY CHỦ",
       description=(
-          "Nhấn nút **🔓 Xác Nhận / Mở Khóa Kênh** bên dưới, sau đó nhập mã"
-          " xác thực để nhận role mở khóa toàn bộ các kênh!"
+          "Nhấn nút **🔓 Bắt Đầu Xác Thực** bên dưới, bot sẽ cấp cho bạn một mã"
+          " ngẫu nhiên riêng tư để nhập và mở khóa kênh!"
       ),
       color=0x5865F2,
   )
@@ -1090,9 +768,7 @@ async def mute_command(
 
 @bot.tree.command(
     name="setwelcome",
-    description=(
-        "Chỉnh sửa lời chào mừng và tải ảnh trực tiếp từ thiết bị của bạn"
-    ),
+    description="Cập nhật hình nền và tùy chỉnh lời chào mừng",
 )
 @app_commands.describe(image="Chọn file ảnh từ thiết bị của bạn (tùy chọn)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -1177,166 +853,6 @@ async def birthday(interaction, date: str):
   )
 
 
-@bot.tree.command(
-    name="doantuong",
-    description="Mở bảng chọn tựa game để chơi minigame đoán nhân vật",
-)
-async def doantuong(interaction: discord.Interaction):
-  view = GameSelectView()
-  embed_msg = discord.Embed(
-      title="🕹️ HỆ THỐNG MINIGAME ĐOÁN NHÂN VẬT",
-      description=(
-          "Vui lòng bấm vào nút tương ứng bên dưới để chọn tựa game bạn muốn"
-          " tham gia thử thách:"
-      ),
-      color=0x9B59B6,
-  )
-  await interaction.response.send_message(
-      embed=embed_msg, view=view, ephemeral=False
-  )
-
-
-@bot.tree.command(
-    name="drop_ff",
-    description="Minigame đoán nhân vật và vật phẩm Free Fire cực vui",
-)
-async def drop_ff(interaction: discord.Interaction):
-  channel_id = interaction.channel.id
-
-  if channel_id in active_drop_ff:
-    return await interaction.response.send_message(
-        "⚠️ Đã có minigame Free Fire đang diễn ra ở kênh này rồi!",
-        ephemeral=True,
-    )
-
-  freefire_items = [
-      (
-          "Alok (Drop the Beat)",
-          ["alok", "a lốc", "dj alok"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/a/a4/Alok_avatar.png"
-          ),
-          "Nhân vật tạo hào quang hồi máu và tăng tốc độ di chuyển.",
-      ),
-      (
-          "Moco (Hacker's Eye)",
-          ["moco", "mô cô"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/8/8f/Moco_avatar.png"
-          ),
-          "Nữ hacker thông thái đánh dấu vị trí kẻ địch khi bắn trúng.",
-      ),
-      (
-          "Gloo Wall",
-          ["bom keo", "gloo wall", "keo", "tường keo"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/6/67/Gloo_Wall.png"
-          ),
-          "Vật phẩm sinh tồn dùng để che chắn đạn tức thời.",
-      ),
-      (
-          "Chrono (Time Turner)",
-          ["chrono", "cr7", "cờ rốt nô"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/7/7b/Chrono_avatar.png"
-          ),
-          "Tạo ra khiên năng lượng bất tử chặn sát thương.",
-      ),
-      (
-          "Kelly (Dash)",
-          ["kelly", "nữ vận động viên", "kê li"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/3/36/Kelly_avatar.png"
-          ),
-          "Nữ vận động viên điền kinh có tốc độ chạy nước rút đỉnh cao.",
-      ),
-      (
-          "Hayato (Bushido)",
-          ["hayato", "ha ya to"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/c/c5/Hayato_avatar.png"
-          ),
-          "Samurai huyền thoại tăng xuyên giáp khi máu thấp.",
-      ),
-      (
-          "K (Master of All)",
-          ["k", "captain k", "giáo sư k"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/4/4c/K_avatar.png"
-          ),
-          "Giáo sư tâm lý học tự động hồi máu và EP cho đồng đội.",
-      ),
-      (
-          "Skyler (Riptide Rhythm)",
-          ["skyler", "sky ler"],
-          (
-              "https://static.wikia.nocookie.net/freefire/images/2/22/Skyler_avatar.png"
-          ),
-          "Phóng sóng âm phá hủy bom keo của kẻ địch nhanh chóng.",
-      ),
-  ]
-
-  item_name, accepted_answers, image_url, hint = random.choice(freefire_items)
-  active_drop_ff[channel_id] = accepted_answers
-
-  embed_msg = discord.Embed(
-      title="🔥 MINIGAME DROP FREE FIRE",
-      description=(
-          "Quan sát hình ảnh item/nhân vật Free Fire bên dưới và đoán tên!\n\n*(Gõ"
-          " đáp án tiếng Việt trực tiếp vào khung chat)*"
-      ),
-      color=0xE67E22,
-  )
-  embed_msg.set_image(url=image_url)
-  embed_msg.add_field(name="💡 Gợi ý hệ thống", value=hint, inline=False)
-  embed_msg.set_footer(text="Thời gian trả lời: 30 giây!")
-
-  await interaction.response.send_message(embed=embed_msg)
-
-  def check(msg: discord.Message):
-    return (
-        msg.channel.id == channel_id
-        and not msg.author.bot
-        and msg.content.lower().strip() in active_drop_ff[channel_id]
-    )
-
-  try:
-    msg = await bot.wait_for("message", timeout=30.0, check=check)
-    if channel_id in active_drop_ff:
-      del active_drop_ff[channel_id]
-
-    success_embed = discord.Embed(
-        title="🎉 CHÍNH XÁC!",
-        description=(
-            f"Chúc mừng **{msg.author.mention}** đã trả lời đúng nhanh nhất!"
-        ),
-        color=0x2ECC71,
-    )
-    success_embed.add_field(
-        name="✨ Tên chính xác", value=f"**{item_name}**", inline=False
-    )
-    success_embed.set_image(url=image_url)
-    await msg.channel.send(embed=success_embed)
-
-  except asyncio.TimeoutError:
-    if channel_id in active_drop_ff:
-      del active_drop_ff[channel_id]
-
-    timeout_embed = discord.Embed(
-        title="⏰ HẾT GIỜ!",
-        description=(
-            "Tiếc quá, không có ai đưa ra đáp án chính xác trong thời gian"
-            " quy định."
-        ),
-        color=0xE74C3C,
-    )
-    timeout_embed.add_field(
-        name="🔑 Đáp án đúng là", value=f"**{item_name}**", inline=False
-    )
-    timeout_embed.set_image(url=image_url)
-    await interaction.followup.send(embed=timeout_embed)
-
-
 # --- CÁC LỆNH ÂM NHẠC (TỐC ĐỘ CAO VỚI WAVELINK) ---
 
 
@@ -1350,7 +866,8 @@ async def play(interaction: discord.Interaction, search: str):
         "❌ Bạn cần vào phòng Voice trước!", ephemeral=True
     )
 
-  await interaction.response.defer()
+  # Phản hồi nhanh Discord interaction tránh lỗi Time out (3s)
+  await interaction.response.defer(thinking=True)
 
   vc: wavelink.Player = interaction.guild.voice_client
   if not vc:
