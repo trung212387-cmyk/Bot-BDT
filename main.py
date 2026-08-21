@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
     "self_role_id": None,
     "birthday_channel_id": None,
     "unlock_role_id": None,
+    "verify_channel_id": None,  # <-- Đã thêm kênh Verify vào đây
 }
 
 
@@ -188,7 +189,7 @@ class SetupVerifyRoleSelect(RoleSelect):
         selected_role = self.values[0]
         set_config("unlock_role_id", selected_role.id)
         await interaction.response.edit_message(
-            content=f"✅ Đã thiết lập thành công role xác thực cho lệnh Verify là: {selected_role.mention}!",
+            content=f"✅ Đã thiết lập thành công role xác thực là: {selected_role.mention}!",
             view=None,
             embed=None,
         )
@@ -363,6 +364,23 @@ class SetupChannelSelect(ChannelSelect):
     async def callback(self, interaction):
         selected_channel = self.values[0]
         set_config(self.key, selected_channel.id)
+        
+        # Nếu cấu hình kênh Verify, tự động gửi bảng nút bấm Verify ra kênh đó luôn
+        if self.key == "verify_channel_id":
+            embed_msg = discord.Embed(
+                title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
+                description=(
+                    "Chào mừng bạn đến với máy chủ!\n\n"
+                    "Nhấn vào nút **🔐 Xác Thực Ngay** bên dưới để nhận mã xác minh cá nhân và mở khóa toàn bộ kênh."
+                ),
+                color=0x57F287
+            )
+            embed_msg.set_footer(text="Hệ thống bảo mật tự động")
+            try:
+                await selected_channel.send(embed=embed_msg, view=VerifyButtonView())
+            except discord.Forbidden:
+                pass
+
         await interaction.response.edit_message(
             content=f"✅ Đã cài đặt **`{self.key}`** vào kênh {selected_channel.mention}!",
             view=None,
@@ -433,7 +451,7 @@ async def on_ready():
     bot.add_view(CloseTicketView())
     bot.add_view(RoleView())
     bot.add_view(SetupView())
-    bot.add_view(VerifyButtonView())  # Đăng ký view nút verify vĩnh viễn
+    bot.add_view(VerifyButtonView())
 
     if not check_birthdays.is_running():
         check_birthdays.start()
@@ -535,8 +553,7 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "• `/ban [thành viên] [lý do]` - Khóa vĩnh viễn thành viên\n"
             "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời\n"
-            "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify\n"
-            "• `/setup_verify_panel` - Gửi bảng nút bấm xác thực ra kênh"
+            "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify"
         ),
         inline=False,
     )
@@ -544,7 +561,7 @@ async def help_command(interaction: discord.Interaction):
     em.add_field(
         name="🛠️ **Quản Lý Hệ Thống**",
         value=(
-            "• `/setup` - Thiết lập bảng cấu hình hệ thống\n"
+            "• `/setup` - Thiết lập bảng cấu hình hệ thống (Bao gồm kênh Verify)\n"
             "• `/weekly_chatters` - Bảng vàng thống kê chat\n"
             "• `/birthday [DD/MM/YYYY]` - Đăng ký sinh nhật\n"
             "• `/setwelcome` - Cài đặt tin nhắn và ảnh chào mừng"
@@ -583,23 +600,6 @@ async def setup_verify(interaction: discord.Interaction):
         view=view,
         ephemeral=True,
     )
-
-
-@bot.tree.command(name="setup_verify_panel", description="Gửi bảng thông báo và nút bấm Verify vào kênh")
-@app_commands.checks.has_permissions(administrator=True)
-async def setup_verify_panel(interaction: discord.Interaction):
-    embed_msg = discord.Embed(
-        title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
-        description=(
-            "Chào mừng bạn đến với máy chủ!\n\n"
-            "Nhấn vào nút **🔐 Xác Thực Ngay** bên dưới để nhận mã xác minh cá nhân và mở khóa toàn bộ kênh."
-        ),
-        color=0x57F287
-    )
-    embed_msg.set_footer(text="Hệ thống bảo mật tự động")
-    
-    await interaction.channel.send(embed=embed_msg, view=VerifyButtonView())
-    await interaction.response.send_message("✅ Đã tạo bảng thông báo xác thực thành công!", ephemeral=True)
 
 
 @bot.tree.command(name="ban", description="Khóa vĩnh viễn (ban) một thành viên khỏi máy chủ")
