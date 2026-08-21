@@ -10,7 +10,7 @@ from threading import Thread
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from discord.ui import Button, ChannelSelect, Modal, RoleSelect, Select, TextInput, View
+from discord.ui import Button, Modal, RoleSelect, Select, TextInput, View
 from flask import Flask
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,8 +32,9 @@ def init_db():
             value TEXT
         )
     """)
+    # Bảng lưu ngày sinh thống nhất cho cả chức năng Verify và Chúc mừng sinh nhật
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS birthdays (
+        CREATE TABLE IF NOT EXISTS user_birthdays (
             user_id TEXT PRIMARY KEY,
             birthday TEXT
         )
@@ -67,7 +68,7 @@ DEFAULT_CONFIG = {
     "self_role_id": None,
     "birthday_channel_id": None,
     "unlock_role_id": None,
-    "verify_channel_id": None,  # <-- Đã thêm kênh Verify vào đây
+    "verify_channel_id": None,
 }
 
 
@@ -96,6 +97,15 @@ def set_config(key, value):
     )
     conn.commit()
     conn.close()
+
+
+def get_user_birthday(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT birthday FROM user_birthdays WHERE user_id = ?", (str(user_id),))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 # --- HỆ THỐNG VERIFY (NÚT BẤM & MODAL) ---
@@ -163,6 +173,13 @@ class VerifyButtonView(View):
         custom_id="persistent_verify_button"
     )
     async def verify_button_callback(self, interaction: discord.Interaction, button: Button):
+        saved_birthday = get_user_birthday(interaction.user.id)
+        if not saved_birthday:
+            return await interaction.response.send_message(
+                "❌ Bạn chưa cung cấp ngày sinh! Vui lòng sử dụng lệnh `/set_birthday [DD/MM/YYYY]` trước khi tiến hành Verify.",
+                ephemeral=True,
+            )
+
         role_id = get_config("unlock_role_id")
         role = interaction.guild.get_role(role_id) if role_id else None
         
@@ -350,79 +367,13 @@ class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
         await interaction.response.send_message("✅ Đã cập nhật nội dung chào mừng!", ephemeral=True)
 
 
-class SetupChannelSelect(ChannelSelect):
-    def __init__(self, key):
-        self.key = key
-        super().__init__(
-            placeholder=f"📂 Chọn kênh cho {key}...",
-            min_values=1,
-            max_values=1,
-            channel_types=[discord.ChannelType.text],
-            custom_id=f"select_channel_{key}",
-        )
-
-    async def callback(self, interaction):
-        selected_channel = self.values[0]
-        set_config(self.key, selected_channel.id)
-        
-        # Nếu cấu hình kênh Verify, tự động gửi bảng nút bấm Verify ra kênh đó luôn
-        if self.key == "verify_channel_id":
-            embed_msg = discord.Embed(
-                title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
-                description=(
-                    "Chào mừng bạn đến với máy chủ!\n\n"
-                    "Nhấn vào nút **🔐 Xác Thực Ngay** bên dưới để nhận mã xác minh cá nhân và mở khóa toàn bộ kênh."
-                ),
-                color=0x57F287
-            )
-            embed_msg.set_footer(text="Hệ thống bảo mật tự động")
-            try:
-                await selected_channel.send(embed=embed_msg, view=VerifyButtonView())
-            except discord.Forbidden:
-                pass
-
-        await interaction.response.edit_message(
-            content=f"✅ Đã cài đặt **`{self.key}`** vào kênh {selected_channel.mention}!",
-            view=None,
-            embed=None,
-        )
-
-
-class SetupChannelView(View):
-    def __init__(self, key):
-        super().__init__(timeout=60)
-        self.add_item(SetupChannelSelect(key))
-
-
-class SetupSelect(Select):
-    def __init__(self):
-        keys = [key for key in DEFAULT_CONFIG if key.endswith("_id")]
-        options = [discord.SelectOption(label=key, value=key, description=f"Cài đặt cho {key}") for key in keys]
-        super().__init__(
-            placeholder="⚙️ Chọn mục cần cấu hình ngay...",
-            custom_id="setup_config_select",
-            options=options,
-        )
-
-    async def callback(self, interaction):
-        selected_key = self.values[0]
-        if "channel" in selected_key:
-            view = SetupChannelView(selected_key)
-            await interaction.response.edit_message(
-                content=f"📂 Vui lòng chọn kênh cho **`{selected_key}`**:",
-                embed=None,
-                view=view,
-            )
-        else:
-            await interaction.response.send_modal(ConfigModal(selected_key))
-
-
 class ConfigModal(Modal):
     def __init__(self, key):
         super().__init__(title=f"⚙️ Cài đặt {key}")
         self.key = key
+        is_channel = "channel" in key or "category" in key
         self.value = TextInput(
-            label="Nhập ID",
+            label="Nhập ID (hoặc nhập số ID kênh/role)" if is_channel else "Nhập ID",
             default=str(get_config(key) or ""),
             required=False,
             max_length=20,
@@ -432,9 +383,44 @@ class ConfigModal(Modal):
     async def on_submit(self, interaction):
         raw = self.value.value.strip()
         if raw and not raw.isdigit():
-            return await interaction.response.send_message("❌ ID phải là số.", ephemeral=True)
-        set_config(self.key, int(raw) if raw else None)
+            return await interaction.response.send_message("❌ ID phải là dạng số.", ephemeral=True)
+        
+        val_int = int(raw) if raw else None
+        set_config(self.key, val_int)
+
+        if self.key == "verify_channel_id" and val_int:
+            channel = interaction.guild.get_channel(val_int)
+            if channel:
+                embed_msg = discord.Embed(
+                    title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
+                    description=(
+                        "Chào mừng bạn đến với máy chủ!\n\n"
+                        "⚠️ **Lưu ý:** Bạn bắt buộc phải đăng ký ngày sinh bằng lệnh `/set_birthday` trước khi bấm nút xác thực bên dưới."
+                    ),
+                    color=0x57F287
+                )
+                embed_msg.set_footer(text="Hệ thống bảo mật tự động")
+                try:
+                    await channel.send(embed=embed_msg, view=VerifyButtonView())
+                except discord.Forbidden:
+                    pass
+
         await interaction.response.send_message("✅ Đã lưu cấu hình thành công.", ephemeral=True)
+
+
+class SetupSelect(Select):
+    def __init__(self):
+        keys = list(DEFAULT_CONFIG.keys())
+        options = [discord.SelectOption(label=key, value=key, description=f"Cài đặt cho {key}") for key in keys]
+        super().__init__(
+            placeholder="⚙️ Chọn mục cần cấu hình ngay...",
+            custom_id="setup_config_select",
+            options=options,
+        )
+
+    async def callback(self, interaction):
+        selected_key = self.values[0]
+        await interaction.response.send_modal(ConfigModal(selected_key))
 
 
 class SetupView(View):
@@ -468,7 +454,7 @@ async def check_birthdays():
     day = datetime.now().strftime("%d/%m")
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, birthday FROM birthdays")
+    cursor.execute("SELECT user_id, birthday FROM user_birthdays")
     rows = cursor.fetchall()
     conn.close()
 
@@ -553,7 +539,8 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "• `/ban [thành viên] [lý do]` - Khóa vĩnh viễn thành viên\n"
             "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời\n"
-            "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify"
+            "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify\n"
+            "• `/set_birthday [DD/MM/YYYY]` - Đăng ký ngày sinh nhật cá nhân"
         ),
         inline=False,
     )
@@ -561,9 +548,8 @@ async def help_command(interaction: discord.Interaction):
     em.add_field(
         name="🛠️ **Quản Lý Hệ Thống**",
         value=(
-            "• `/setup` - Thiết lập bảng cấu hình hệ thống (Bao gồm kênh Verify)\n"
+            "• `/setup` - Thiết lập bảng cấu hình hệ thống\n"
             "• `/weekly_chatters` - Bảng vàng thống kê chat\n"
-            "• `/birthday [DD/MM/YYYY]` - Đăng ký sinh nhật\n"
             "• `/setwelcome` - Cài đặt tin nhắn và ảnh chào mừng"
         ),
         inline=False,
@@ -584,7 +570,6 @@ async def setup_command(interaction):
     values = "\n".join(
         f"`{key}`: `{get_config(key) or 'Chưa cài'}`"
         for key in DEFAULT_CONFIG
-        if key.endswith("_id")
     )
     await interaction.response.send_message(
         embed=embed("BẢNG CẤU HÌNH BOT", values), view=SetupView(), ephemeral=True
@@ -696,13 +681,13 @@ async def weekly_chatters(interaction: discord.Interaction, limit: app_commands.
     await interaction.response.send_message(embed=embed("THỐNG KÊ CHAT TUẦN", message, 0x5865F2))
 
 
-@bot.tree.command(name="birthday", description="Đăng ký sinh nhật")
-@app_commands.describe(date="Định dạng DD/MM/YYYY")
-async def birthday(interaction, date: str):
+@bot.tree.command(name="set_birthday", description="Đăng ký ngày tháng năm sinh cá nhân")
+@app_commands.describe(date="Nhập theo định dạng DD/MM/YYYY")
+async def set_birthday(interaction: discord.Interaction, date: str):
     try:
         parsed = datetime.strptime(date.strip(), "%d/%m/%Y")
     except ValueError:
-        return await interaction.response.send_message("❌ Dùng đúng định dạng DD/MM/YYYY.", ephemeral=True)
+        return await interaction.response.send_message("❌ Sai định dạng! Vui lòng nhập theo định dạng: `DD/MM/YYYY` (Ví dụ: 25/12/2008).", ephemeral=True)
 
     user_id = str(interaction.user.id)
     formatted_date = parsed.strftime("%d/%m/%Y")
@@ -710,13 +695,13 @@ async def birthday(interaction, date: str):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT OR REPLACE INTO birthdays (user_id, birthday) VALUES (?, ?)",
+        "INSERT OR REPLACE INTO user_birthdays (user_id, birthday) VALUES (?, ?)",
         (user_id, formatted_date),
     )
     conn.commit()
     conn.close()
 
-    await interaction.response.send_message(f"✅ Đã lưu sinh nhật: **{formatted_date}**", ephemeral=True)
+    await interaction.response.send_message(f"✅ Đã cập nhật thành công ngày sinh của bạn: **{formatted_date}**. Giờ đây bạn đã có thể tiến hành bấm nút **Verify**!", ephemeral=True)
 
 
 # --- WEB SERVER (FLASK) ---
