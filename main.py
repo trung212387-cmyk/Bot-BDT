@@ -10,7 +10,6 @@ from threading import Thread
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from discord.ui import Button, Modal, RoleSelect, Select, TextInput, View
 from flask import Flask
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,7 +23,7 @@ if not TOKEN:
 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS config (
@@ -46,6 +45,12 @@ def init_db():
             name TEXT,
             messages INTEGER,
             PRIMARY KEY (guild_id, week_key, user_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_coins (
+            user_id TEXT PRIMARY KEY,
+            coins INTEGER DEFAULT 0
         )
     """)
     conn.commit()
@@ -72,7 +77,7 @@ DEFAULT_CONFIG = {
 
 
 def get_config(key):
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
     row = cursor.fetchone()
@@ -88,7 +93,7 @@ def get_config(key):
 
 
 def set_config(key, value):
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
@@ -99,12 +104,35 @@ def set_config(key, value):
 
 
 def get_user_birthday(user_id):
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT birthday FROM user_birthdays WHERE user_id = ?", (str(user_id),))
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def add_user_coins(user_id, amount):
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO user_coins (user_id, coins) VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET coins = coins + ?
+    """,
+        (str(user_id), amount, amount),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_coins(user_id):
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT coins FROM user_coins WHERE user_id = ?", (str(user_id),))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
 
 
 # --- HỆ THỐNG XÁC THỰC & SINH NHẬT ---
@@ -116,10 +144,10 @@ def generate_random_code(length=6):
 temp_verify_codes = {}
 
 
-class BirthdayOnlyModal(Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
+class BirthdayOnlyModal(discord.ui.Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
     def __init__(self):
         super().__init__()
-        self.date_input = TextInput(
+        self.date_input = discord.ui.TextInput(
             label="Nhập ngày tháng năm sinh của bạn",
             placeholder="Định dạng: DD/MM/YYYY (Ví dụ: 15/08/2008)",
             style=discord.TextStyle.short,
@@ -141,7 +169,7 @@ class BirthdayOnlyModal(Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
         user_id = str(interaction.user.id)
         formatted_date = parsed.strftime("%d/%m/%Y")
 
-        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT OR REPLACE INTO user_birthdays (user_id, birthday) VALUES (?, ?)",
@@ -152,28 +180,28 @@ class BirthdayOnlyModal(Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
 
         await interaction.response.send_message(
             f"✅ Đã lưu thành công ngày sinh `{formatted_date}` của bạn! Bây giờ bạn đã có thể bấm nút **Verify** để xác thực tài khoản.",
-            ephemeral=True
+            ephemeral=True,
         )
 
 
-class BirthdayButtonView(View):
+class BirthdayButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
         label="🎂 Đăng Ký Ngày Sinh Ngay",
         style=discord.ButtonStyle.primary,
-        custom_id="persistent_birthday_button"
+        custom_id="persistent_birthday_button",
     )
-    async def birthday_button_callback(self, interaction: discord.Interaction, button: Button):
+    async def birthday_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(BirthdayOnlyModal())
 
 
-class VerifyCodeModal(Modal, title="🔐 Xác Thực Mã Bảo Mật"):
+class VerifyCodeModal(discord.ui.Modal, title="🔐 Xác Thực Mã Bảo Mật"):
     def __init__(self, code: str):
         super().__init__()
         self.code = code
-        self.code_input = TextInput(
+        self.code_input = discord.ui.TextInput(
             label=f"Mã xác thực của bạn là: [{code}]",
             placeholder="Nhập lại chính xác mã phía trên vào đây...",
             style=discord.TextStyle.short,
@@ -204,7 +232,7 @@ class VerifyCodeModal(Modal, title="🔐 Xác Thực Mã Bảo Mật"):
         try:
             if role not in interaction.user.roles:
                 await interaction.user.add_roles(role)
-            
+
             await interaction.response.send_message(
                 f"✅ Xác thực thành công! Đã cấp role {role.mention} và mở khóa toàn bộ kênh cho bạn.",
                 ephemeral=True,
@@ -216,30 +244,29 @@ class VerifyCodeModal(Modal, title="🔐 Xác Thực Mã Bảo Mật"):
             )
 
 
-class VerifyButtonView(View):
+class VerifyButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
         label="🔐 Xác Thực Ngay",
         style=discord.ButtonStyle.success,
-        custom_id="persistent_verify_button"
+        custom_id="persistent_verify_button",
     )
-    async def verify_button_callback(self, interaction: discord.Interaction, button: Button):
+    async def verify_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_id = get_config("unlock_role_id")
         role = interaction.guild.get_role(role_id) if role_id else None
-        
+
         if role and role in interaction.user.roles:
             return await interaction.response.send_message(
                 "❌ Bạn đã được xác thực từ trước rồi!", ephemeral=True
             )
 
-        # Chặn nếu chưa nhập ngày sinh
         saved_birthday = get_user_birthday(interaction.user.id)
         if not saved_birthday:
             return await interaction.response.send_message(
                 "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng bấm nút **🎂 Đăng Ký Ngày Sinh Ngay** ở kênh sinh nhật trước khi tiến hành xác thực.",
-                ephemeral=True
+                ephemeral=True,
             )
 
         new_code = generate_random_code()
@@ -247,7 +274,7 @@ class VerifyButtonView(View):
         return await interaction.response.send_modal(VerifyCodeModal(code=new_code))
 
 
-class SetupVerifyRoleSelect(RoleSelect):
+class SetupVerifyRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
         super().__init__(
             placeholder="📂 Chọn role cấp khi Verify...",
@@ -266,7 +293,7 @@ class SetupVerifyRoleSelect(RoleSelect):
         )
 
 
-class SetupVerifyView(View):
+class SetupVerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         self.add_item(SetupVerifyRoleSelect())
@@ -278,6 +305,9 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# Lưu trữ các phòng game đang hoạt động theo kênh chat: {channel_id: BomBomKissGame}
+active_games = {}
 
 
 def embed(title, description, color=0x5865F2):
@@ -299,7 +329,7 @@ def record_chat_activity(message):
     user_id = str(message.author.id)
     name = message.author.display_name
 
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -316,7 +346,7 @@ def record_chat_activity(message):
 
 # --- TICKET & ROLE VIEWS ---
 
-class CloseTicketView(View):
+class CloseTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -325,7 +355,7 @@ class CloseTicketView(View):
         style=discord.ButtonStyle.secondary,
         custom_id="close_ticket",
     )
-    async def close(self, interaction: discord.Interaction, button: Button):
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             embed=embed("XÁC NHẬN ĐÓNG TICKET", "Kênh sẽ tự động xóa sau **5 giây**...", 0xFEE75C)
         )
@@ -336,7 +366,7 @@ class CloseTicketView(View):
             pass
 
 
-class TicketPanelView(View):
+class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -383,7 +413,7 @@ class TicketPanelView(View):
         await self.create_ticket(interaction, "Tố Cáo / Góp Ý", "to-cao")
 
 
-class RoleView(View):
+class RoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -405,12 +435,181 @@ class RoleView(View):
             await interaction.response.send_message("❌ Bot không đủ quyền quản lý role này.", ephemeral=True)
 
 
+# --- PHÒNG CHỜ VÀ MINIGAME: 9 Ô BẤM NÚT ---
+
+class BomBomKissGame:
+    def __init__(self, host: discord.User, target: discord.User, channel: discord.TextChannel):
+        self.host = host
+        self.target = target
+        self.channel = channel
+        self.players = [host, target]
+        
+        # Random người chơi đi đầu tiên
+        self.current_turn_index = random.randint(0, 1)
+        
+        self.boom_index = random.randint(1, 9)
+        self.score = 0
+        self.opened_boxes = set()
+        self.is_over = False
+
+    def get_current_player(self):
+        return self.players[self.current_turn_index]
+
+    def switch_turn(self):
+        self.current_turn_index = 1 - self.current_turn_index
+
+
+class GameBoardView(discord.ui.View):
+    def __init__(self, game: BomBomKissGame):
+        super().__init__(timeout=180)
+        self.game = game
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+        for i in range(1, 10):
+            if i in self.game.opened_boxes:
+                btn = discord.ui.Button(
+                    label=f"Ô {i} (Đã mở)",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                    row=(i - 1) // 3
+                )
+            else:
+                btn = discord.ui.Button(
+                    label=f"Ô {i}",
+                    style=discord.ButtonStyle.primary,
+                    row=(i - 1) // 3
+                )
+                btn.callback = self.create_callback(i)
+            self.add_item(btn)
+
+    def create_callback(self, box_num: int):
+        async def button_callback(interaction: discord.Interaction):
+            if self.game.is_over:
+                return await interaction.response.send_message("❌ Trận đấu đã kết thúc!", ephemeral=True)
+
+            current_player = self.game.get_current_player()
+            if interaction.user != current_player:
+                return await interaction.response.send_message(
+                    f"❌ Chưa tới lượt của bạn! Hiện tại là lượt của {current_player.mention}.",
+                    ephemeral=True
+                )
+
+            if box_num in self.game.opened_boxes:
+                return await interaction.response.send_message("❌ Ô này đã được mở rồi!", ephemeral=True)
+
+            self.game.opened_boxes.add(box_num)
+
+            # Kiểm tra trúng bom hay không
+            if box_num == self.game.boom_index:
+                self.game.is_over = True
+                active_games.pop(self.game.channel.id, None)
+
+                for child in self.children:
+                    child.disabled = True
+
+                embed_msg = embed(
+                    "💥💣 BOM BOM KISS - BÙM NỔ!",
+                    f"💥 Ôi không! {interaction.user.mention} đã bấm vào **Ô số {box_num}** chứa quả bom định mệnh!\n"
+                    f"Trò chơi kết thúc! {interaction.user.mention} thua cuộc trong lượt này. 🔥",
+                    0xED4245
+                )
+                return await interaction.response.edit_message(embed=embed_msg, view=self)
+            else:
+                self.game.score += 50
+
+                # Nếu mở hết 8 ô an toàn -> Chiến thắng hoàn hảo
+                if len(self.game.opened_boxes) == 8:
+                    reward_coins = 200
+                    add_user_coins(interaction.user.id, reward_coins)
+                    total_balance = get_user_coins(interaction.user.id)
+                    self.game.is_over = True
+                    active_games.pop(self.game.channel.id, None)
+
+                    for child in self.children:
+                        child.disabled = True
+
+                    embed_msg = embed(
+                        "🎉💋 BOM BOM KISS - CHIẾN THẮNG HOÀN HẢO!",
+                        f"🏆 Tuyệt vời! {interaction.user.mention} đã né sạch bom và mở toàn bộ 8 ô an toàn!\n"
+                        f"🎁 Phần thưởng chiến thắng: **`+{reward_coins} Coin`** 🪙\n"
+                        f"💰 Tổng số Coin hiện tại của bạn: **`{total_balance} Coin`** ✨",
+                        0x57F287
+                    )
+                    return await interaction.response.edit_message(embed=embed_msg, view=self)
+                else:
+                    self.game.switch_turn()
+                    next_player = self.game.get_current_player()
+                    self.update_buttons()
+
+                    embed_msg = embed(
+                        "💥 KỊCH TÍNH: BOM BOM KISS 💋",
+                        f"✨ {interaction.user.mention} vừa mở **Ô số {box_num}** (`Nụ Hôn Ngọt Ngào` +50 điểm)!\n\n"
+                        f"👉 Lượt tiếp theo thuộc về: **{next_player.mention}**. Hãy bấm chọn ô tiếp theo trên bàn cờ!",
+                        0xFF73FA
+                    )
+                    return await interaction.response.edit_message(embed=embed_msg, view=self)
+
+        return button_callback
+
+    async def on_timeout(self):
+        self.game.is_over = True
+        active_games.pop(self.game.channel.id, None)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.game.channel.send("⏱️ Trận đấu Bom Bom Kiss đã bị hủy do hết thời gian phản hồi (3 phút)!")
+        except:
+            pass
+
+
+class RoomLobbyView(discord.ui.View):
+    def __init__(self, host: discord.User, channel: discord.TextChannel):
+        super().__init__(timeout=60)
+        self.host = host
+        self.channel = channel
+        self.message = None
+
+    @discord.ui.button(label="🎮 Tham Gia Trận Đấu", style=discord.ButtonStyle.success, custom_id="join_room_game")
+    async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user == self.host:
+            return await interaction.response.send_message("❌ Bạn là chủ phòng, không thể tự tham gia phòng của mình!", ephemeral=True)
+        if interaction.user.bot:
+            return await interaction.response.send_message("❌ Bot không thể tham gia chơi!", ephemeral=True)
+
+        game = BomBomKissGame(self.host, interaction.user, self.channel)
+        active_games[self.channel.id] = game
+
+        current_player = game.get_current_player()
+        game_view = GameBoardView(game)
+
+        msg_embed = embed(
+            "💥 KỊCH TÍNH: 9 Ô BOM BOM KISS 💋",
+            f"🏠 Phòng đấu giữa {self.host.mention} và {interaction.user.mention} đã bắt đầu!\n\n"
+            f"🎲 **Bot đã random và lượt đi đầu tiên thuộc về:** {current_player.mention}!\n\n"
+            f"👉 {current_player.mention}, hãy bấm vào các nút bên dưới để chọn ô!",
+            0xFF73FA
+        )
+        await interaction.response.edit_message(content="🚀 Trận đấu chính thức bắt đầu!", embed=msg_embed, view=game_view)
+        self.stop()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            if self.message:
+                await self.message.edit(content="⏱️ Phòng chờ Bom Bom Kiss đã hết hạn do không có ai tham gia!", view=None)
+        except:
+            pass
+
+
 # --- CÀI ĐẶT HỆ THỐNG (SETUP) ---
 
-class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
+class WelcomeModal(discord.ui.Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
     def __init__(self):
         super().__init__()
-        self.msg_input = TextInput(
+        self.msg_input = discord.ui.TextInput(
             label="Nội dung tin nhắn",
             style=discord.TextStyle.paragraph,
             default=get_config("welcome_message") or "",
@@ -424,12 +623,12 @@ class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
         await interaction.response.send_message("✅ Đã cập nhật nội dung chào mừng!", ephemeral=True)
 
 
-class ConfigModal(Modal):
+class ConfigModal(discord.ui.Modal):
     def __init__(self, key):
         super().__init__(title=f"⚙️ Cài đặt {key}")
         self.key = key
         is_channel = "channel" in key or "category" in key
-        self.value = TextInput(
+        self.value = discord.ui.TextInput(
             label="Nhập ID (hoặc nhập số ID kênh/role)" if is_channel else "Nhập ID",
             default=str(get_config(key) or ""),
             required=False,
@@ -441,7 +640,7 @@ class ConfigModal(Modal):
         raw = self.value.value.strip()
         if raw and not raw.isdigit():
             return await interaction.response.send_message("❌ ID phải là dạng số.", ephemeral=True)
-        
+
         val_int = int(raw) if raw else None
         set_config(self.key, val_int)
 
@@ -449,12 +648,12 @@ class ConfigModal(Modal):
             channel = interaction.guild.get_channel(val_int)
             if channel:
                 embed_msg = discord.Embed(
-                    title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
+                    title="🔥 XÁC THỰC MỞ KHÓA MÁY CHỦ",
                     description=(
                         "Chào mừng bạn đến với máy chủ!\n\n"
                         "⚠️ **Hướng dẫn:** Bấm vào nút bên dưới để tiến hành xác thực tài khoản một cách bảo mật."
                     ),
-                    color=0x57F287
+                    color=0x57F287,
                 )
                 embed_msg.set_footer(text="Hệ thống bảo mật tự động")
                 try:
@@ -466,12 +665,12 @@ class ConfigModal(Modal):
             channel = interaction.guild.get_channel(val_int)
             if channel:
                 embed_msg = discord.Embed(
-                    title="『 ĐĂNG KÝ NGÀY SINH NHẬT 』",
+                    title="🎂 ĐĂNG KÝ NGÀY SINH NHẬT",
                     description=(
                         "Chào mừng bạn đến với kênh thông báo sinh nhật!\n\n"
                         "🎁 **Hướng dẫn:** Bấm vào nút **🎂 Đăng Ký Ngày Sinh Ngay** bên dưới để hệ thống ghi nhớ và chúc mừng sinh nhật bạn vào mỗi năm."
                     ),
-                    color=0xFF73FA
+                    color=0xFF73FA,
                 )
                 embed_msg.set_footer(text="Hệ thống sinh nhật tự động")
                 try:
@@ -482,7 +681,7 @@ class ConfigModal(Modal):
         await interaction.response.send_message("✅ Đã lưu cấu hình thành công.", ephemeral=True)
 
 
-class SetupSelect(Select):
+class SetupSelect(discord.ui.Select):
     def __init__(self):
         keys = list(DEFAULT_CONFIG.keys())
         options = [discord.SelectOption(label=key, value=key, description=f"Cài đặt cho {key}") for key in keys]
@@ -497,7 +696,7 @@ class SetupSelect(Select):
         await interaction.response.send_modal(ConfigModal(selected_key))
 
 
-class SetupView(View):
+class SetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(SetupSelect())
@@ -507,6 +706,7 @@ class SetupView(View):
 
 @bot.event
 async def on_ready():
+    # Chỉ đăng ký các View có custom_id cố định để duy trì sau khi restart
     bot.add_view(TicketPanelView())
     bot.add_view(CloseTicketView())
     bot.add_view(RoleView())
@@ -519,7 +719,7 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Bot sẵn sàng: {bot.user} | Đồng bộ {len(synced)} lệnh")
+        print(f"✅ Bot sẵn sàng: {bot.user} | Đồng bộ {len(synced)} lệnh Slash Commands")
     except Exception as e:
         print(f"⚠️ Lỗi đồng bộ lệnh: {e}")
 
@@ -527,7 +727,7 @@ async def on_ready():
 @tasks.loop(hours=24)
 async def check_birthdays():
     day = datetime.now().strftime("%d/%m")
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, birthday FROM user_birthdays")
     rows = cursor.fetchall()
@@ -559,6 +759,23 @@ async def before_birthdays():
 async def on_message(message):
     if message.author.bot:
         return
+
+    # --- LỆNH NHẮN TIN TRUYỀN THỐNG: !phong ---
+    if message.content.strip().lower() == "!phong":
+        if message.channel.id in active_games:
+            return await message.channel.send("❌ Kênh này đang có một ván đấu diễn ra! Hãy hoàn thành ván trước đó.", delete_after=5)
+        
+        view = RoomLobbyView(message.author, message.channel)
+        msg_embed = embed(
+            "🏠 PHÒNG CHỜ BOM BOM KISS 💋",
+            f"{message.author.mention} vừa mở phòng chờ minigame **9 Ô May Mắn**!\n\n"
+            "✨ Bấm nút **🎮 Tham Gia Trận Đấu** bên dưới để nhảy vào phòng và cùng chơi ngay lập tức!",
+            0xFF73FA
+        )
+        sent_msg = await message.channel.send(embed=msg_embed, view=view)
+        view.message = sent_msg
+        return
+
     if message.content.startswith("!"):
         return
     if message.guild:
@@ -628,10 +845,19 @@ async def help_command(interaction: discord.Interaction):
     )
 
     em.add_field(
+        name="🎮 **Minigame & Kinh Tế (Coin)**",
+        value=(
+            "• Gõ `!phong` - Tạo phòng chờ minigame (Random lượt đi, bấm nút chọn ô)\n"
+            "• `/balance` - Kiểm tra số Coin hiện có của bạn\n"
+            "• `/weekly_chatters` - Bảng vàng thống kê chat tuần"
+        ),
+        inline=False,
+    )
+
+    em.add_field(
         name="🛠️ **Quản Lý Hệ Thống**",
         value=(
             "• `/setup` - Thiết lập bảng cấu hình hệ thống\n"
-            "• `/weekly_chatters` - Bảng vàng thống kê chat\n"
             "• `/setwelcome` - Cài đặt tin nhắn và ảnh chào mừng"
         ),
         inline=False,
@@ -646,11 +872,22 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=em, ephemeral=True)
 
 
+@bot.tree.command(name="balance", description="Kiểm tra số xu (Coin) hiện có của bạn")
+@app_commands.describe(member="Thành viên cần xem (để trống nếu muốn xem của chính mình)")
+async def balance_command(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    coins = get_user_coins(target.id)
+    await interaction.response.send_message(
+        embed=embed("VÍ TIỀN / COIN", f"👤 **Thành viên:** {target.mention}\n💰 **Số dư hiện tại:** `{coins:,} Coin`", 0xFEE75C),
+        ephemeral=True,
+    )
+
+
 @bot.tree.command(name="verify", description="Mở bảng xác thực bảo mật riêng tư cho bạn")
 async def verify_command(interaction: discord.Interaction):
     role_id = get_config("unlock_role_id")
     role = interaction.guild.get_role(role_id) if role_id else None
-    
+
     if role and role in interaction.user.roles:
         return await interaction.response.send_message(
             "❌ Bạn đã được xác thực từ trước rồi!", ephemeral=True
@@ -660,7 +897,7 @@ async def verify_command(interaction: discord.Interaction):
     if not saved_birthday:
         return await interaction.response.send_message(
             "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng sang kênh sinh nhật để đăng ký ngày sinh trước khi tiến hành xác thực.",
-            ephemeral=True
+            ephemeral=True,
         )
 
     new_code = generate_random_code()
@@ -672,7 +909,7 @@ async def verify_command(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def verify_panel(interaction: discord.Interaction):
     embed_msg = discord.Embed(
-        title="『 XÁC THỰC MỞ KHÓA MÁY CHỦ 』",
+        title="🔥 XÁC THỰC MỞ KHÓA MÁY CHỦ",
         description=(
             "Chào mừng bạn đến với máy chủ!\n\n"
             "⚠️ **Hướng dẫn:**\n"
@@ -680,10 +917,10 @@ async def verify_panel(interaction: discord.Interaction):
             "• Bấm vào nút **🔐 Xác Thực Ngay** bên dưới.\n"
             "• Điền mã xác thực vào bảng bảo mật riêng tư hiện lên để hoàn tất."
         ),
-        color=0x57F287
+        color=0x57F287,
     )
     embed_msg.set_footer(text="Hệ thống bảo mật tự động")
-    
+
     await interaction.channel.send(embed=embed_msg, view=VerifyButtonView())
     await interaction.response.send_message("✅ Đã gửi bảng Verify thành công vào kênh này!", ephemeral=True)
 
@@ -692,22 +929,22 @@ async def verify_panel(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def birthday_panel(interaction: discord.Interaction):
     embed_msg = discord.Embed(
-        title="『 ĐĂNG KÝ NGÀY SINH NHẬT 』",
+        title="🎂 ĐĂNG KÝ NGÀY SINH NHẬT",
         description=(
             "Chào mừng bạn đến với kênh thông báo sinh nhật!\n\n"
             "🎁 **Hướng dẫn:** Bấm vào nút **🎂 Đăng Ký Ngày Sinh Ngay** bên dưới để hệ thống ghi nhớ và chúc mừng sinh nhật bạn vào mỗi năm."
         ),
-        color=0xFF73FA
+        color=0xFF73FA,
     )
     embed_msg.set_footer(text="Hệ thống sinh nhật tự động")
-    
+
     await interaction.channel.send(embed=embed_msg, view=BirthdayButtonView())
     await interaction.response.send_message("✅ Đã gửi bảng Đăng Ký Sinh Nhật thành công vào kênh này!", ephemeral=True)
 
 
 @bot.tree.command(name="setup", description="Bảng cài đặt cấu hình Bot")
 @app_commands.checks.has_permissions(administrator=True)
-async def setup_command(interaction):
+async def setup_command(interaction: discord.Interaction):
     values = "\n".join(
         f"`{key}`: `{get_config(key) or 'Chưa cài'}`"
         for key in DEFAULT_CONFIG
@@ -801,7 +1038,7 @@ async def weekly_chatters(interaction: discord.Interaction, limit: app_commands.
     week_key = f"{week_info.year}-W{week_info.week:02d}"
     guild_id = str(interaction.guild.id)
 
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         """
