@@ -469,19 +469,35 @@ class GameBoardView(discord.ui.View):
         self.clear_items()
         for i in range(1, 10):
             if i in self.game.opened_boxes:
-                btn = discord.ui.Button(
-                    label=f"Ô {i} (Đã mở)",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=True,
-                    row=(i - 1) // 3
-                )
+                if i == self.game.boom_index:
+                    btn = discord.ui.Button(
+                        label="💣 BOM",
+                        style=discord.ButtonStyle.danger,
+                        disabled=True,
+                        row=(i - 1) // 3
+                    )
+                else:
+                    btn = discord.ui.Button(
+                        label=f"💎 Ô {i}",
+                        style=discord.ButtonStyle.success,
+                        disabled=True,
+                        row=(i - 1) // 3
+                    )
             else:
-                btn = discord.ui.Button(
-                    label=f"Ô {i}",
-                    style=discord.ButtonStyle.primary,
-                    row=(i - 1) // 3
-                )
-                btn.callback = self.create_callback(i)
+                if self.game.is_over:
+                    btn = discord.ui.Button(
+                        label=f"Ô {i}",
+                        style=discord.ButtonStyle.secondary,
+                        disabled=True,
+                        row=(i - 1) // 3
+                    )
+                else:
+                    btn = discord.ui.Button(
+                        label=f"Ô {i}",
+                        style=discord.ButtonStyle.primary,
+                        row=(i - 1) // 3
+                    )
+                    btn.callback = self.create_callback(i)
             self.add_item(btn)
 
     def create_callback(self, box_num: int):
@@ -501,21 +517,22 @@ class GameBoardView(discord.ui.View):
 
             self.game.opened_boxes.add(box_num)
 
-            # Kiểm tra trúng bom hay không
+            # --- KHI BẤM TRÚNG BOM ---
             if box_num == self.game.boom_index:
                 self.game.is_over = True
                 active_games.pop(self.game.channel.id, None)
 
-                for child in self.children:
-                    child.disabled = True
+                self.update_buttons()
 
                 embed_msg = embed(
-                    "💥💣 BOM BOM KISS - BÙM NỔ!",
-                    f"💥 Ôi không! {interaction.user.mention} đã bấm vào **Ô số {box_num}** chứa quả bom định mệnh!\n"
-                    f"Trò chơi kết thúc! {interaction.user.mention} thua cuộc trong lượt này. 🔥",
+                    "💥💣 BOM BOM KISS - BÙM NỔ KẾT THÚC!",
+                    f"💥 Ôi không! {interaction.user.mention} đã bấm trúng **Ô số {box_num}** chứa quả **💣 Bom** định mệnh!\n\n"
+                    f"💀 **Trò chơi chính thức kết thúc!** {interaction.user.mention} đã thua cuộc trong ván đấu này. 🔥",
                     0xED4245
                 )
                 return await interaction.response.edit_message(embed=embed_msg, view=self)
+
+            # --- KHI BẤM TRÚNG KIM CƯƠNG (AN TOÀN) ---
             else:
                 self.game.score += 50
 
@@ -527,12 +544,11 @@ class GameBoardView(discord.ui.View):
                     self.game.is_over = True
                     active_games.pop(self.game.channel.id, None)
 
-                    for child in self.children:
-                        child.disabled = True
+                    self.update_buttons()
 
                     embed_msg = embed(
                         "🎉💋 BOM BOM KISS - CHIẾN THẮNG HOÀN HẢO!",
-                        f"🏆 Tuyệt vời! {interaction.user.mention} đã né sạch bom và mở toàn bộ 8 ô an toàn!\n"
+                        f"🏆 Tuyệt vời! {interaction.user.mention} đã né sạch bom và tìm thấy toàn bộ **💎 Kim Cương** ở 8 ô an toàn!\n"
                         f"🎁 Phần thưởng chiến thắng: **`+{reward_coins} Coin`** 🪙\n"
                         f"💰 Tổng số Coin hiện tại của bạn: **`{total_balance} Coin`** ✨",
                         0x57F287
@@ -545,7 +561,7 @@ class GameBoardView(discord.ui.View):
 
                     embed_msg = embed(
                         "💥 KỊCH TÍNH: BOM BOM KISS 💋",
-                        f"✨ {interaction.user.mention} vừa mở **Ô số {box_num}** (`Nụ Hôn Ngọt Ngào` +50 điểm)!\n\n"
+                        f"✨ {interaction.user.mention} vừa mở trúng **💎 Kim Cương** ở Ô số {box_num} (+50 điểm)!\n\n"
                         f"👉 Lượt tiếp theo thuộc về: **{next_player.mention}**. Hãy bấm chọn ô tiếp theo trên bàn cờ!",
                         0xFF73FA
                     )
@@ -706,7 +722,6 @@ class SetupView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    # Chỉ đăng ký các View có custom_id cố định để duy trì sau khi restart
     bot.add_view(TicketPanelView())
     bot.add_view(CloseTicketView())
     bot.add_view(RoleView())
