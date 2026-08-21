@@ -60,7 +60,7 @@ DEFAULT_CONFIG = {
     "welcome_image": (
         "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=1000"
         " &auto=format&fit=crop"
-    ),  # Ảnh mặc định cyberpunk phong cách
+    ),
     "welcome_message": (
         "Chào mừng {user} đã gia nhập **{server}**!\n\n▫️ **Tài khoản:**"
         " {name}\n▫️ **Thành viên thứ:** `{count}`"
@@ -100,15 +100,98 @@ def set_config(key, value):
   conn.close()
 
 
-# Hàm tạo mã ngẫu nhiên cho tính năng Verify
+# --- HỆ THỐNG VERIFY (HIỆN BẢNG NHẬP CODE KÈM MÃ TRỰC TIẾP) ---
+
+
 def generate_random_code(length=6):
   return "".join(
       random.choices(string.ascii_uppercase + string.digits, k=length)
   )
 
 
-# Biến tạm lưu mã verify của từng người dùng
 temp_verify_codes = {}
+
+
+class DirectVerifyModal(Modal):
+
+  def __init__(self, code: str):
+    super().__init__(title="🔐 Xác Thực Mở Khóa Kênh")
+    self.code = code
+    self.code_input = TextInput(
+        label=f"Mã xác thực của bạn là: [{code}]",
+        placeholder="Nhập lại chính xác mã ở trên vào đây...",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=10,
+    )
+    self.add_item(self.code_input)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    user_id = interaction.user.id
+    entered_code = self.code_input.value.strip().upper()
+    correct_code = temp_verify_codes.get(user_id)
+
+    if not correct_code or entered_code != correct_code:
+      return await interaction.response.send_message(
+          "❌ Mã không chính xác! Vui lòng dùng lại lệnh `/verify` để lấy mã"
+          " mới.",
+          ephemeral=True,
+      )
+
+    role_id = get_config("unlock_role_id")
+    role = interaction.guild.get_role(role_id) if role_id else None
+    if not role:
+      return await interaction.response.send_message(
+          "❌ Role mở khóa chưa được cấu hình trên hệ thống bởi Admin.",
+          ephemeral=True,
+      )
+
+    try:
+      if role not in interaction.user.roles:
+        await interaction.user.add_roles(role)
+      await interaction.response.send_message(
+          f"✅ Xác thực thành công! Đã cấp role {role.mention} và mở khóa"
+          " toàn bộ kênh cho bạn.",
+          ephemeral=True,
+      )
+      temp_verify_codes.pop(user_id, None)
+    except discord.Forbidden:
+      await interaction.response.send_message(
+          "❌ Bot không đủ quyền trao role này.", ephemeral=True
+      )
+
+
+class SetupVerifyRoleSelect(RoleSelect):
+
+  def __init__(self):
+    super().__init__(
+        placeholder="📂 Chọn role cấp khi Verify...",
+        min_values=1,
+        max_values=1,
+        custom_id="setup_verify_role_select",
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    selected_role = self.values[0]
+    set_config("unlock_role_id", selected_role.id)
+    await interaction.response.edit_message(
+        content=(
+            f"✅ Đã thiết lập thành công role xác thực cho lệnh Verify là:"
+            f" {selected_role.mention}!"
+        ),
+        view=None,
+        embed=None,
+    )
+
+
+class SetupVerifyView(View):
+
+  def __init__(self):
+    super().__init__(timeout=60)
+    self.add_item(SetupVerifyRoleSelect())
+
+
+# --- KẾT THÚC KHỐI VERIFY ---
 
 intents = discord.Intents.default()
 intents.members = True
@@ -285,98 +368,6 @@ class RoleView(View):
       )
 
 
-class VerifyModal(Modal, title="🔐 Nhập Mã Xác Thực Ngẫu Nhiên"):
-  code_input = TextInput(
-      label="Mã xác thực của bạn",
-      placeholder="Nhập chính xác mã vừa nhận vào đây...",
-      style=discord.TextStyle.short,
-      required=True,
-      max_length=10,
-  )
-
-  async def on_submit(self, interaction: discord.Interaction):
-    user_id = interaction.user.id
-    entered_code = self.code_input.value.strip().upper()
-    correct_code = temp_verify_codes.get(user_id)
-
-    if not correct_code or entered_code != correct_code:
-      return await interaction.response.send_message(
-          "❌ Mã không chính xác hoặc đã hết hạn! Vui lòng bấm nút Verify lại.",
-          ephemeral=True,
-      )
-
-    role_id = get_config("unlock_role_id")
-    role = interaction.guild.get_role(role_id) if role_id else None
-    if not role:
-      return await interaction.response.send_message(
-          "❌ Role mở khóa chưa được cấu hình trên hệ thống bởi Admin.",
-          ephemeral=True,
-      )
-
-    try:
-      if role not in interaction.user.roles:
-        await interaction.user.add_roles(role)
-      await interaction.response.send_message(
-          f"✅ Xác thực thành công! Đã cấp role {role.mention}.", ephemeral=True
-      )
-      temp_verify_codes.pop(user_id, None)
-    except discord.Forbidden:
-      await interaction.response.send_message(
-          "❌ Bot không đủ quyền trao role này.", ephemeral=True
-      )
-
-
-class UnlockView(View):
-
-  def __init__(self):
-    super().__init__(timeout=None)
-
-  @discord.ui.button(
-      label="🔓 Bắt Đầu Xác Thực",
-      style=discord.ButtonStyle.success,
-      custom_id="unlock_channels_button",
-  )
-  async def unlock(self, interaction: discord.Interaction, button: Button):
-    new_code = generate_random_code()
-    temp_verify_codes[interaction.user.id] = new_code
-
-    await interaction.response.send_message(
-        f"⚡ **Mã xác thực ngẫu nhiên của bạn là: `{new_code}`**\n*(Hãy nhớ mã này và nhập vào khung bên dưới)*",
-        ephemeral=True,
-    )
-    await interaction.followup.send_modal(VerifyModal())
-
-
-class SetupVerifyRoleSelect(RoleSelect):
-
-  def __init__(self):
-    super().__init__(
-        placeholder="📂 Chọn role cấp khi Verify...",
-        min_values=1,
-        max_values=1,
-        custom_id="setup_verify_role_select",
-    )
-
-  async def callback(self, interaction: discord.Interaction):
-    selected_role = self.values[0]
-    set_config("unlock_role_id", selected_role.id)
-    await interaction.response.edit_message(
-        content=(
-            f"✅ Đã thiết lập thành công role xác thực cho lệnh Verify là:"
-            f" {selected_role.mention}!"
-        ),
-        view=None,
-        embed=None,
-    )
-
-
-class SetupVerifyView(View):
-
-  def __init__(self):
-    super().__init__(timeout=60)
-    self.add_item(SetupVerifyRoleSelect())
-
-
 class WelcomeModal(Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
   msg_input = TextInput(
       label="Nội dung tin nhắn",
@@ -491,7 +482,6 @@ async def on_ready():
   bot.add_view(TicketPanelView())
   bot.add_view(CloseTicketView())
   bot.add_view(RoleView())
-  bot.add_view(UnlockView())
   bot.add_view(SetupView())
 
   if not check_birthdays.is_running():
@@ -604,7 +594,7 @@ async def help_command(interaction: discord.Interaction):
       value=(
           "• `/ban [thành viên] [lý do]` - Khóa vĩnh viễn thành viên\n"
           "• `/mute [thành viên] [phút] [lý do]` - Cấm chat thành viên tạm thời\n"
-          "• `/verify` - Gửi khung nút bấm xác nhận kênh\n"
+          "• `/verify` - Mở bảng nhập mã xác thực cá nhân\n"
           "• `/setup_verify` - Cài đặt Role trao khi người dùng Verify"
       ),
       inline=False,
@@ -672,22 +662,12 @@ async def setup_verify(interaction: discord.Interaction):
 
 
 @bot.tree.command(
-    name="verify", description="Gửi khung nút bấm xác nhận/mở khóa kênh"
+    name="verify", description="Nhận mã ngẫu nhiên và mở bảng xác thực trực tiếp"
 )
-@app_commands.checks.has_permissions(administrator=True)
 async def verify_command(interaction: discord.Interaction):
-  em = discord.Embed(
-      title="🔐 XÁC NHẬN MỞ KHÓA MÁY CHỦ",
-      description=(
-          "Nhấn nút **🔓 Bắt Đầu Xác Thực** bên dưới, bot sẽ cấp cho bạn một mã"
-          " ngẫu nhiên riêng tư để nhập và mở khóa kênh!"
-      ),
-      color=0x5865F2,
-  )
-  await interaction.channel.send(embed=em, view=UnlockView())
-  await interaction.response.send_message(
-      "✅ Đã gửi bảng Verify thành công!", ephemeral=True
-  )
+  new_code = generate_random_code()
+  temp_verify_codes[interaction.user.id] = new_code
+  await interaction.response.send_modal(DirectVerifyModal(new_code))
 
 
 @bot.tree.command(
@@ -866,7 +846,6 @@ async def play(interaction: discord.Interaction, search: str):
         "❌ Bạn cần vào phòng Voice trước!", ephemeral=True
     )
 
-  # Phản hồi nhanh Discord interaction tránh lỗi Time out (3s)
   await interaction.response.defer(thinking=True)
 
   vc: wavelink.Player = interaction.guild.voice_client
