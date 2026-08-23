@@ -1,3 +1,4 @@
+
 import asyncio
 from datetime import datetime, timedelta
 import os
@@ -223,7 +224,7 @@ class BirthdayOnlyModal(discord.ui.Modal, title="🎂 Đăng Ký Ngày Sinh Bả
         conn.close()
 
         await interaction.response.send_message(
-            f"✅ Đã lưu thành công ngày sinh `{formatted_date}` của bạn! Bây giờ bạn đã có thể bấm nút **Verify** để xác thực tài khoản.",
+            f"✅ Đã lưu thành công ngày sinh `{formatted_date}` của bạn! Bây giờ bạn đã có thể bấm nút **Verify** hoặc dùng lệnh `/verify` để xác thực tài khoản.",
             ephemeral=True,
         )
 
@@ -261,7 +262,7 @@ class VerifyCodeModal(discord.ui.Modal, title="🔐 Xác Thực Mã Bảo Mật"
 
         if not correct_code or entered_code != correct_code:
             return await interaction.response.send_message(
-                "❌ Mã xác thực không chính xác hoặc đã hết hạn! Vui lòng bấm lại nút Verify để nhận mã mới.",
+                "❌ Mã xác thực không chính xác hoặc đã hết hạn! Vui lòng bấm lại nút Verify hoặc lệnh `/verify` để nhận mã mới.",
                 ephemeral=True,
             )
 
@@ -309,7 +310,7 @@ class VerifyButtonView(discord.ui.View):
         saved_birthday = get_user_birthday(interaction.user.id)
         if not saved_birthday:
             return await interaction.response.send_message(
-                "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng bấm nút **🎂 Đăng Ký Ngày Sinh Ngay** ở kênh sinh nhật trước khi tiến hành xác thực.",
+                "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng dùng lệnh `/birthday` hoặc bấm nút **🎂 Đăng Ký Ngày Sinh Ngay** trước khi tiến hành xác thực.",
                 ephemeral=True,
             )
 
@@ -352,7 +353,7 @@ intents.message_content = True
 
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents, help_command=None)
+        super().__init__(command_prefix="?", intents=intents, help_command=None)
 
     async def setup_hook(self):
         try:
@@ -777,23 +778,6 @@ class RoomLobbyView(discord.ui.View):
 
 # --- CÀI ĐẶT HỆ THỐNG (SETUP) ---
 
-class WelcomeModal(discord.ui.Modal, title="⚙️ Cài đặt Chào Mừng (Welcome)"):
-    def __init__(self):
-        super().__init__()
-        self.msg_input = discord.ui.TextInput(
-            label="Nội dung tin nhắn",
-            style=discord.TextStyle.paragraph,
-            default=get_config("welcome_message") or "",
-            required=True,
-            max_length=1000,
-        )
-        self.add_item(self.msg_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        set_config("welcome_message", self.msg_input.value.strip())
-        await interaction.response.send_message("✅ Đã cập nhật nội dung chào mừng!", ephemeral=True)
-
-
 class ConfigModal(discord.ui.Modal):
     def __init__(self, key):
         super().__init__(title=f"⚙️ Cài đặt {key}")
@@ -940,9 +924,6 @@ async def on_message(message):
         view.message = sent_msg
         return
 
-    if message.content.startswith("!"):
-        return
-
     if message.guild:
         record_chat_activity(message)
 
@@ -957,6 +938,38 @@ async def on_message(message):
             pass
 
     await bot.process_commands(message)
+
+
+# --- PREFIX COMMANDS (LỆNH DẤU ?) ---
+
+@bot.command(name="mute")
+@commands.has_permissions(manage_roles=True)
+async def prefix_mute(ctx, member: discord.Member, minutes: int = 10, *, reason: str = "Không có lý do"):
+    """Lệnh cấm chat nhanh với dấu ? (Ví dụ: ?mute @User 15 Phá kênh)"""
+    try:
+        duration = timedelta(minutes=minutes)
+        await member.timeout(duration, reason=reason)
+        
+        em = discord.Embed(
+            title="🔇 THÀNH VIÊN ĐÃ BỊ MUTE",
+            description=f"👤 **Thành viên:** {member.mention}\n⏰ **Thời gian:** `{minutes} phút`\n📝 **Lý do:** `{reason}`",
+            color=discord.Color.orange()
+        )
+        em.set_footer(text=f"Thực hiện bởi {ctx.author.display_name} • ph.huyy")
+        await ctx.send(embed=em)
+    except discord.Forbidden:
+        await ctx.send("❌ Bot không đủ quyền để timeout thành viên này (hãy kiểm tra lại thứ hạng Role của bot).")
+    except Exception as e:
+        await ctx.send(f"❌ Đã xảy ra lỗi: `{e}`")
+
+@prefix_mute.error
+async def prefix_mute_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Bạn không có quyền sử dụng lệnh này (cần quyền Quản lý vai trò / Quản trị viên).")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Sai cú pháp! Vui lòng dùng: `?mute @thành_viên [số_phút] [lý_do]`")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Không tìm thấy thành viên đó hoặc thời gian nhập không hợp lệ.")
 
 
 @bot.event
@@ -993,12 +1006,16 @@ async def help_command(interaction: discord.Interaction):
         color=0x5865F2,
     )
     em.add_field(
-        name="🛡️ **Xác Thực & Tiện Ích Quest**",
+        name="🛡️ **Xác Thực & Tiện Ích Quest & Sinh Nhật & Kiểm Duyệt**",
         value=(
+            "• `?mute @user [phút] [lý do]` - Mute nhanh thành viên (Lệnh dấu hỏi)\n"
             "• `/agree` - Hiển thị bảng điều khoản hệ thống\n"
             "• `/token` - Nhập hoặc kiểm tra thời hạn token cá nhân\n"
             "• `/auto` - Quét danh sách Quest Discord chưa làm (Cooldown 2 tuần/lần)\n"
-            "• `/verify` - Mở bảng xác thực mã cá nhân"
+            "• `/verify` - Mở bảng xác thực mã cá nhân (Cần đăng ký ngày sinh trước)\n"
+            "• `/birthday` - Đăng ký hoặc cập nhật ngày sinh cá nhân\n"
+            "• `/chucmung` - Gửi lời chúc mừng đến thành viên khác\n"
+            "• `/profile` - Xem hồ sơ cá nhân, coin và ngày sinh"
         ),
         inline=False,
     )
@@ -1017,11 +1034,11 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="agree", description="Hiển thị bảng xác nhận đồng ý điều khoản")
 async def slash_agree(interaction: discord.Interaction):
-    embed = discord.Embed(
+    embed_msg = discord.Embed(
         title="📜 BẢNG XÁC NHẬN", description="Nội dung điều khoản sử dụng hệ thống.", color=discord.Color.blue()
     )
-    embed.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
-    await interaction.response.send_message(embed=embed, ephemeral=False)
+    embed_msg.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
+    await interaction.response.send_message(embed=embed_msg, ephemeral=False)
 
 
 @bot.tree.command(name="token", description="Kiểm tra hoặc nhập token mới")
@@ -1031,13 +1048,13 @@ async def slash_token(interaction: discord.Interaction):
         user_data = token_database[user_id]
         if datetime.now() < user_data["expires_at"]:
             time_left = user_data["expires_at"] - datetime.now()
-            embed = discord.Embed(
+            embed_msg = discord.Embed(
                 title="ℹ️ Thông Tin Token",
                 description=f"Token của bạn vẫn còn hạn khoảng **{time_left.days} ngày**.",
                 color=discord.Color.blue(),
             )
-            embed.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed_msg.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
+            await interaction.response.send_message(embed=embed_msg, ephemeral=True)
             return
     await interaction.response.send_modal(TokenInputModal())
 
@@ -1056,7 +1073,7 @@ async def slash_auto(interaction: discord.Interaction):
             days_left = time_left.days
             hours_left = time_left.seconds // 3600
 
-            embed = discord.Embed(
+            embed_msg = discord.Embed(
                 title="⏳ Đang Trong Thời Gian Chờ (Cooldown)",
                 description=(
                     "⚠️ Hệ thống giới hạn **mỗi tài khoản chỉ được dùng lệnh `/auto` 1 lần trong vòng 2 tuần** "
@@ -1065,18 +1082,18 @@ async def slash_auto(interaction: discord.Interaction):
                 ),
                 color=discord.Color.orange(),
             )
-            embed.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed_msg.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
+            await interaction.response.send_message(embed=embed_msg, ephemeral=True)
             return
 
     if user_id not in token_database or now >= token_database[user_id]["expires_at"]:
-        embed = discord.Embed(
+        embed_msg = discord.Embed(
             title="⚠️ Cảnh Báo",
             description="Bạn chưa nhập token hoặc token đã hết hạn (quá 1 tuần).\nHãy dùng lệnh `/token` trước!",
             color=discord.Color.orange(),
         )
-        embed.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed_msg.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
+        await interaction.response.send_message(embed=embed_msg, ephemeral=True)
         return
 
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -1107,18 +1124,18 @@ async def slash_auto(interaction: discord.Interaction):
                             incomplete_quests.append({"title": quest_title, "expires": formatted_expiry})
 
                     if not incomplete_quests:
-                        embed = discord.Embed(
+                        embed_msg = discord.Embed(
                             title="🎉 Hoàn Tất",
                             description="Tuyệt vời! Tài khoản của bạn không còn nhiệm vụ nào chưa làm.",
                             color=discord.Color.green(),
                         )
-                        embed.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
-                        await interaction.followup.send(embed=embed, ephemeral=True)
+                        embed_msg.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
+                        await interaction.followup.send(embed=embed_msg, ephemeral=True)
                         return
 
                     auto_cooldown_database[user_id] = now
 
-                    embed = discord.Embed(
+                    embed_msg = discord.Embed(
                         title="📋 BẢNG QUÉT NHIỆM VỤ DISCORD CHƯA LÀM",
                         description="Danh sách các nhiệm vụ đang chờ xử lý kèm thời hạn:",
                         color=discord.Color.blurple(),
@@ -1128,24 +1145,94 @@ async def slash_auto(interaction: discord.Interaction):
                     for idx, q in enumerate(incomplete_quests, 1):
                         quest_field_text += f"📌 **{idx}.** `{q['title']}`\n   ⏳ *Hạn chót:* **{q['expires']}**\n\n"
 
-                    embed.add_field(name="Danh sách Quest & Thời Gian:", value=quest_field_text, inline=False)
-                    embed.add_field(name="🚀 Hướng dẫn:", value="Bấm nút **Auto All** bên dưới để tự động hóa!", inline=False)
-                    embed.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%d/%m/%Y %H:%M')}")
+                    embed_msg.add_field(name="Danh sách Quest & Thời Gian:", value=quest_field_text, inline=False)
+                    embed_msg.add_field(name="🚀 Hướng dẫn:", value="Bấm nút **Auto All** bên dưới để tự động hóa!", inline=False)
+                    embed_msg.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%d/%m/%Y %H:%M')}")
 
                     view = AutoQuestView(interaction.user, token_value, incomplete_quests)
-                    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                    await interaction.followup.send(embed=embed_msg, view=view, ephemeral=True)
 
                 else:
-                    embed = discord.Embed(
+                    embed_msg = discord.Embed(
                         title="❌ Lỗi Hệ Thống",
                         description=f"Không thể quét dữ liệu nhiệm vụ (Mã lỗi: `{resp.status}`).",
                         color=discord.Color.red(),
                     )
-                    embed.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
-                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    embed_msg.set_footer(text="by ph.huyy • Vĩnh Phúc, VN")
+                    await interaction.followup.send(embed=embed_msg, ephemeral=True)
 
     except Exception as e:
         await interaction.followup.send(f"❌ Đã xảy ra lỗi: `{e}`", ephemeral=True)
+
+
+@bot.tree.command(name="birthday", description="Đăng ký hoặc cập nhật ngày tháng năm sinh của bạn")
+async def slash_birthday(interaction: discord.Interaction):
+    await interaction.response.send_modal(BirthdayOnlyModal())
+
+
+@bot.tree.command(name="setup_birthday", description="Gửi bảng nút bấm đăng ký ngày sinh vào kênh này (Dành cho Admin)")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_birthday(interaction: discord.Interaction):
+    embed_msg = discord.Embed(
+        title="🎂 ĐĂNG KÝ NGÀY SINH NHẬT",
+        description=(
+            "Chào mừng bạn đến với kênh thông báo sinh nhật!\n\n"
+            "🎁 **Hướng dẫn:** Bấm vào nút bên dưới để hệ thống ghi nhớ và chúc mừng sinh nhật."
+        ),
+        color=0xFF73FA,
+    )
+    embed_msg.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
+    
+    await interaction.channel.send(embed=embed_msg, view=BirthdayButtonView())
+    await interaction.response.send_message("✅ Đã tạo bảng nút đăng ký ngày sinh thành công trong kênh này!", ephemeral=True)
+
+
+@bot.tree.command(name="chucmung", description="Gửi lời chúc mừng đặc biệt đến một thành viên trong server")
+@app_commands.describe(
+    member="Thành viên bạn muốn gửi lời chúc",
+    noidung="Nội dung lời chúc mừng của bạn"
+)
+async def slash_chucmung(interaction: discord.Interaction, member: discord.Member, noidung: str):
+    embed_msg = discord.Embed(
+        title="🎉 LỜI CHÚC MỪNG ĐẶC BIỆT ✨",
+        description=f"💌 Gửi tới {member.mention}:\n\n> *{noidung}*",
+        color=0xFF73FA,
+    )
+    embed_msg.set_footer(text=f"Được gửi bởi {interaction.user.display_name} • ph.huyy | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
+    
+    await interaction.channel.send(content=f"🎉 {member.mention} ơi, có lời chúc mừng gửi đến bạn nè!", embed=embed_msg)
+    await interaction.response.send_message("✅ Đã gửi lời chúc mừng thành công!", ephemeral=True)
+
+
+@bot.tree.command(name="profile", description="Xem thông tin hồ sơ cá nhân, số coin, ngày sinh và trạng thái xác thực của bạn")
+@app_commands.describe(member="Thành viên bạn muốn xem hồ sơ (để trống nếu xem của chính bạn)")
+async def slash_profile(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    
+    coins = get_user_coins(target.id)
+    birthday = get_user_birthday(target.id) or "Chưa đăng ký ❌"
+    
+    role_id = get_config("unlock_role_id")
+    role = interaction.guild.get_role(role_id) if role_id else None
+    if role and role in target.roles:
+        verify_status = f"Đã xác thực ({role.mention}) ✅"
+    else:
+        verify_status = "Chưa xác thực ❌"
+
+    embed_msg = discord.Embed(
+        title=f"👤 HỒ SƠ CÁ NHÂN — {target.display_name}",
+        color=0x5865F2,
+    )
+    if target.display_avatar:
+        embed_msg.set_thumbnail(url=target.display_avatar.url)
+        
+    embed_msg.add_field(name="💰 Số dư Coin", value=f"`{coins:,} Coin`", inline=True)
+    embed_msg.add_field(name="🎂 Ngày sinh", value=f"`{birthday}`", inline=True)
+    embed_msg.add_field(name="🛡️ Trạng thái Verify", value=verify_status, inline=False)
+    
+    embed_msg.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
+    
+    await interaction.response.send_message(embed=embed_msg, ephemeral=True)
 
 
 @bot.tree.command(name="balance", description="Kiểm tra số xu (Coin) hiện có của bạn")
@@ -1159,7 +1246,7 @@ async def balance_command(interaction: discord.Interaction, member: discord.Memb
     )
 
 
-@bot.tree.command(name="verify", description="Mở bảng xác thực bảo mật riêng tư cho bạn")
+@bot.tree.command(name="verify", description="Mở bảng xác thực bảo mật riêng tư cho bạn (Yêu cầu đã đăng ký ngày sinh)")
 async def verify_command(interaction: discord.Interaction):
     role_id = get_config("unlock_role_id")
     role = interaction.guild.get_role(role_id) if role_id else None
@@ -1170,7 +1257,7 @@ async def verify_command(interaction: discord.Interaction):
     saved_birthday = get_user_birthday(interaction.user.id)
     if not saved_birthday:
         return await interaction.response.send_message(
-            "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng sang kênh sinh nhật để đăng ký trước.", ephemeral=True
+            "❌ **Bạn chưa đăng ký ngày sinh!** Vui lòng dùng lệnh `/birthday` hoặc bấm nút đăng ký ngày sinh trước khi xác thực.", ephemeral=True
         )
 
     new_code = generate_random_code()
@@ -1231,7 +1318,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot Discord System with Quest & Minigame is running 24/7!"
+    return "Bot Discord System with Quest, Minigame, Birthday, Profile & Prefix Commands is running 24/7!"
 
 
 def run_web():
@@ -1242,4 +1329,4 @@ def run_web():
 if __name__ == "__main__":
     t = Thread(target=run_web, daemon=True)
     t.start()
-    bot.run(TOKEN)
+    bot.run(TOKEN
