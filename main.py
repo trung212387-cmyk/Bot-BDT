@@ -1,4 +1,3 @@
-
 import asyncio
 from datetime import datetime, timedelta
 import os
@@ -7,6 +6,7 @@ import random
 import string
 import sqlite3
 from threading import Thread
+import time
 
 import aiohttp
 import discord
@@ -187,6 +187,35 @@ def generate_random_code(length=6):
 
 
 temp_verify_codes = {}
+
+
+class AgreeDiscordView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Tôi đồng ý", 
+        style=discord.ButtonStyle.success, 
+        custom_id="agree_terms_button", 
+        emoji="✅"
+    )
+    async def agree_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "✅ Cảm ơn bạn đã xác nhận đồng ý với các điều khoản trách nhiệm của hệ thống!", 
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Không đồng ý", 
+        style=discord.ButtonStyle.danger, 
+        custom_id="disagree_terms_button", 
+        emoji="❌"
+    )
+    async def disagree_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "❌ Bạn đã từ chối điều khoản. Một số tính năng có thể bị hạn chế.", 
+            ephemeral=True
+        )
 
 
 class BirthdayOnlyModal(discord.ui.Modal, title="🎂 Đăng Ký Ngày Sinh Bảo Mật"):
@@ -865,6 +894,7 @@ async def on_ready():
     bot.add_view(SetupView())
     bot.add_view(VerifyButtonView())
     bot.add_view(BirthdayButtonView())
+    bot.add_view(AgreeDiscordView())
 
     if not check_birthdays.is_running():
         check_birthdays.start()
@@ -1009,7 +1039,7 @@ async def help_command(interaction: discord.Interaction):
         name="🛡️ **Xác Thực & Tiện Ích Quest & Sinh Nhật & Kiểm Duyệt**",
         value=(
             "• `?mute @user [phút] [lý do]` - Mute nhanh thành viên (Lệnh dấu hỏi)\n"
-            "• `/agree` - Hiển thị bảng điều khoản hệ thống\n"
+            "• `/agree` - Hiển thị bảng điều khoản xác nhận trách nhiệm\n"
             "• `/token` - Nhập hoặc kiểm tra thời hạn token cá nhân\n"
             "• `/auto` - Quét danh sách Quest Discord chưa làm (Cooldown 2 tuần/lần)\n"
             "• `/verify` - Mở bảng xác thực mã cá nhân (Cần đăng ký ngày sinh trước)\n"
@@ -1032,13 +1062,21 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=em, ephemeral=True)
 
 
-@bot.tree.command(name="agree", description="Hiển thị bảng xác nhận đồng ý điều khoản")
+@bot.tree.command(name="agree", description="Hiển thị bảng xác nhận điều khoản và trách nhiệm")
 async def slash_agree(interaction: discord.Interaction):
     embed_msg = discord.Embed(
-        title="📜 BẢNG XÁC NHẬN", description="Nội dung điều khoản sử dụng hệ thống.", color=discord.Color.blue()
+        title="📜 BẢNG XÁC NHẬN ĐIỀU KHOẢN & TRÁCH NHIỆM", 
+        description=(
+            "Bạn có chịu hoàn toàn mọi trách nhiệm khi sử dụng các tính năng "
+            "hoặc tự động hóa trên hệ thống này không?\n\n"
+            "⚠️ *Vui lòng đọc kỹ trước khi bấm chọn bên dưới.*"
+        ), 
+        color=discord.Color.blue()
     )
     embed_msg.set_footer(text=f"by ph.huyy • Vĩnh Phúc, VN | {get_vinh_phuc_time().strftime('%H:%M:%S')}")
-    await interaction.response.send_message(embed=embed_msg, ephemeral=False)
+    
+    view = AgreeDiscordView()
+    await interaction.response.send_message(embed=embed_msg, view=view, ephemeral=False)
 
 
 @bot.tree.command(name="token", description="Kiểm tra hoặc nhập token mới")
@@ -1116,9 +1154,14 @@ async def slash_auto(interaction: discord.Interaction):
                         completed = user_status.get("completed_at") is not None
                         if not completed:
                             config = q.get("config", {})
-                            quest_title = config.get("messages", {}).get("game_title", "Nhiệm vụ Discord")
+                            
+                            quest_title = (
+                                config.get("messages", {}).get("game_title")
+                                or config.get("application", {}).get("name")
+                                or "Nhiệm vụ Discord"
+                            )
 
-                            expires_at_raw = q.get("config", {}).get("expires_at") or q.get("expires_at")
+                            expires_at_raw = config.get("expires_at") or q.get("expires_at")
                             formatted_expiry = format_expiry_time(expires_at_raw)
 
                             incomplete_quests.append({"title": quest_title, "expires": formatted_expiry})
@@ -1170,7 +1213,7 @@ async def slash_birthday(interaction: discord.Interaction):
     await interaction.response.send_modal(BirthdayOnlyModal())
 
 
-@bot.tree.command(name="setup_birthday", description="Gửi bảng nút bấm đăng ký ngày sinh vào kênh này (Dành cho Admin)")
+@bot.tree.command(name="setup_birthday", description="Gửi bảng nút bấm đăng ký ngày sinh vào kênh này (Dành for Admin)")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_birthday(interaction: discord.Interaction):
     embed_msg = discord.Embed(
@@ -1312,7 +1355,7 @@ async def weekly_chatters(interaction: discord.Interaction, limit: app_commands.
     await interaction.response.send_message(embed=embed("THỐNG KÊ CHAT TUẦN", message, 0x5865F2))
 
 
-# --- WEB SERVER (FLASK CHO RENDER) ---
+# --- WEB SERVER (FLASK CHO RENDER - TỐI ƯU KEEP-ALIVE) ---
 app = Flask(__name__)
 
 
@@ -1321,8 +1364,26 @@ def home():
     return "Bot Discord System with Quest, Minigame, Birthday, Profile & Prefix Commands is running 24/7!"
 
 
+def run_self_ping():
+    """Tự động ping chính nó mỗi 5 phút để tránh Render sleep"""
+    import urllib.request
+    time.sleep(10)  # Chờ server web khởi động xong
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not render_url:
+        return
+    while True:
+        try:
+            urllib.request.urlopen(render_url)
+        except Exception:
+            pass
+        time.sleep(300)  # Lặp lại sau mỗi 5 phút
+
+
 def run_web():
     port = int(os.environ.get("PORT", 10000))
+    # Chạy thêm luồng self-ping ngầm
+    ping_thread = Thread(target=run_self_ping, daemon=True)
+    ping_thread.start()
     app.run(host="0.0.0.0", port=port)
 
 
