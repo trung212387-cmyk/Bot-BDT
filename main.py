@@ -1329,4 +1329,4 @@ def run_web():
 if __name__ == "__main__":
     t = Thread(target=run_web, daemon=True)
     t.start()
-    bot.run(TOKEN
+    bot.run(TOKEN)
